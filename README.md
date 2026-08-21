@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/MAPS_logo.png" width="400">
+  <img src="images/MAPSlogo.png" width="400">
 </p>
 
 # MAPS — Microvascular Analysis & Phenotyping Suite
