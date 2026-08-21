@@ -1,14 +1,8 @@
-# MAPS
-Microvascular Analysis &amp; Phenotyping Suite
-
-<p align="center">
-  <img src="images/MAPS_logo.png" width="300">
-</p>
-
 # MAPS — Microvascular Analysis & Phenotyping Suite
 
 A MATLAB GUI for measuring vessel diameter over time from two-photon *xy* time-lapse imaging, using a full-width-at-half-maximum (FWHM) intensity profile along a manually defined vessel skeleton.
 
+![MAPS logo](MAPSlogo.png)
 
 ## What it does
 
@@ -62,3 +56,9 @@ The **Analysis** dropdown (`xyDiam` / `zstack` / `linescan`) is scaffolded for f
 ## Credits
 
 Developed by [Kira Shaw](mailto:kira.shaw@manchester.ac.uk), University of Manchester. GUI built with [Claude Code](https://claude.com/claude-code) assistance.
+
+`subfunctions/ini2struct.m` is a third-party utility by Andriy Nych, included as-is (see its header) — it is not covered by this repo's license below.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
