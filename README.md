@@ -2,7 +2,7 @@
 
 A MATLAB GUI for measuring vessel diameter over time from two-photon *xy* time-lapse imaging, using a full-width-at-half-maximum (FWHM) intensity profile along a manually defined vessel skeleton.
 
-![MAPS logo](MAPSlogo.png)
+![MAPS logo](images/MAPSlogo.png)
 
 ## What it does
 
@@ -14,7 +14,7 @@ Given a time-lapse TIF of a vessel (single channel, one frame per timepoint), MA
 4. At every point along each skeleton, draws a line perpendicular to the vessel and measures the FWHM of the intensity profile across it, frame by frame — giving a continuous diameter trace per skeleton point, per branch, over time.
 5. Displays the result live as a diameter heatmap (skeleton point × frame) and an averaged trace, and exports both the raw data and summary figures.
 
-See `example_MAPS_GUI_xyDiam_4x_small.mp4` for a demo of the workflow (sped up 4×).
+See `example_MAPS_GUI_4x_small.mp4` for a video of the GUI in use (recorded live on a laptop, sped up 4×).
 
 ## Features
 
@@ -48,6 +48,8 @@ MAPS
 3. Check/enter **Pixel size (microns)** and **Frame rate (Hz)** in the Parameters panel (auto-filled where possible — see above).
 4. **GO** to run the analysis.
 5. **Export data** / **Export figure** once it completes.
+
+No data of your own to hand? `exampleData4Testing/` has a sample `vessel.tif` plus its `Experiment.xml`, so you can try the whole pipeline — including the auto pixel-size/frame-rate detection — out of the box.
 
 ## Current scope / roadmap
 
