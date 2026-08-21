@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/MAPSlogo.png" width="400">
+</p>
+
 # MAPS — Microvascular Analysis & Phenotyping Suite
 
 A MATLAB GUI for measuring vessel diameter over time from two-photon *xy* time-lapse imaging, using a full-width-at-half-maximum (FWHM) intensity profile along a manually defined vessel skeleton.
