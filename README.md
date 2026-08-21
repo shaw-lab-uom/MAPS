@@ -2,7 +2,9 @@
 
 A MATLAB GUI for measuring vessel diameter over time from two-photon *xy* time-lapse imaging, using a full-width-at-half-maximum (FWHM) intensity profile along a manually defined vessel skeleton.
 
-![MAPS logo](MAPSlogo.png)
+<p align="center">
+  <img src="./images/MAPS_logo.png" width="400">
+</p>
 
 ## What it does
 
