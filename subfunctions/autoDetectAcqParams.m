@@ -1,15 +1,22 @@
-function [pxsz_um, fps, pxSource, fpsSource] = autoDetectAcqParams(tifPath, expDir)
-% autoDetectAcqParams  Try to recover pixel size (microns) and frame rate
-% (Hz) for a vessel TIF without asking the user to type them in.
+function [pxsz_um, fps, zstep_um, pxSource, fpsSource] = autoDetectAcqParams(tifPath, expDir)
+% autoDetectAcqParams  Try to recover pixel size (microns), frame rate (Hz)
+% and z-step (microns) for a vessel TIF without asking the user to type
+% them in.
 %
-% Written by Kira Shaw with Claude Code, Aug 2026.
+% Written by Kira Shaw with Claude Code, Aug 2026. zstep_um added when the
+% zstack analysis mode was brought into the GUI - only the TIF-metadata
+% path below can supply it (neither the .ini nor .xml branches carry a
+% z-step field).
 %
-% Checks, in order, stopping as soon as both values are found:
+% Checks, in order, stopping as soon as both pixel size and fps are found:
 %   1. The TIF's own metadata - XResolution + the ImageJ-style
-%      ImageDescription block (unit=..., finterval=...) that Fiji writes
-%      when it saves a calibrated hyperstack.
+%      ImageDescription block (unit=..., finterval=..., spacing=...) that
+%      Fiji writes when it saves a calibrated (hyper)stack.
 %   2. A .ini file anywhere under expDir (Scientifica / SciScan rig).
-%   3. An Experiment.xml file in expDir (ThorLabs rig).
+%   3. A .xml file anywhere under expDir (ThorLabs rig).
+% Neither the .ini nor .xml step assumes a filename - both search expDir
+% (recursively) by extension, so renaming the accompanying metadata file
+% doesn't break detection.
 % Whatever isn't found is left as NaN so the GUI can fall back to asking
 % the user, same as before.
 %
@@ -19,12 +26,14 @@ function [pxsz_um, fps, pxSource, fpsSource] = autoDetectAcqParams(tifPath, expD
 %OUTPUTS
 % pxsz_um   : pixel size in microns, or NaN if not found anywhere
 % fps       : frame rate in Hz, or NaN if not found anywhere
+% zstep_um  : z-step in microns (only present for a z-stack tif), or NaN
 % pxSource  : where pxsz_um came from - 'TIF metadata' / 'ini file' /
-%             'Experiment.xml' / 'not found'
+%             'xml file' / 'not found'
 % fpsSource : same, for fps
 
-pxsz_um  = NaN;
-fps      = NaN;
+pxsz_um   = NaN;
+fps       = NaN;
+zstep_um  = NaN;
 pxSource  = '';
 fpsSource = '';
 
@@ -63,8 +72,17 @@ try
     if ~isempty(tok)
         fi = str2double(tok{1});
         if fi > 0
-            fps      = 1 / fi;
+            fps       = 1 / fi;
             fpsSource = 'TIF metadata';
+        end
+    end
+
+    % --- z-step: ImageJ's "spacing" field, microns (z-stacks only) ---------
+    tok = regexpi(descr, 'spacing\s*=\s*([\d.eE+-]+)', 'tokens', 'once');
+    if ~isempty(tok)
+        zs = str2double(tok{1});
+        if zs > 0
+            zstep_um = zs;
         end
     end
 catch ME
@@ -97,7 +115,7 @@ if isnan(pxsz_um) || isnan(fps)
                     isfield(ini_file.x_,'frames0x2ep0x2esec')
                 v = str2double(ini_file.x_.frames0x2ep0x2esec);
                 if v > 0
-                    fps      = v;
+                    fps       = v;
                     fpsSource = 'ini file';
                 end
             end
@@ -107,31 +125,38 @@ if isnan(pxsz_um) || isnan(fps)
     end
 end
 
-%% 3) a ThorLabs Experiment.xml in expDir ------------------------------------
+%% 3) a ThorLabs-style *.xml file anywhere under expDir ----------------------
+% Written by Kira Shaw with Claude Code, Aug 2026. Was hardcoded to only
+% look for a file literally named "Experiment.xml" directly in expDir -
+% renaming or moving that file (e.g. into a subfolder, or to something
+% like "metaData.xml") would silently fail this check and fall through to
+% "not found" with no error. Now searches for any .xml file anywhere under
+% expDir instead, the same way the .ini branch above already does, so the
+% filename/location isn't assumed.
 if isnan(pxsz_um) || isnan(fps)
-    xmlPath = fullfile(expDir, 'Experiment.xml');
-    if isfile(xmlPath)
-        try
-            S = readstruct(xmlPath);
+    try
+        xmlFiles = findFolders(expDir, '*.xml');
+        if ~isempty(xmlFiles)
+            S = readstruct(xmlFiles{1});
             % NOTE: as above, edit the field paths below if your rig's
-            % Experiment.xml is laid out differently.
+            % xml file is laid out differently.
             if isnan(pxsz_um) && isfield(S,'LSM') && isfield(S.LSM,'pixelSizeUMAttribute')
                 v = S.LSM.pixelSizeUMAttribute;
                 if v > 0
                     pxsz_um  = v;
-                    pxSource = 'Experiment.xml';
+                    pxSource = 'xml file';
                 end
             end
             if isnan(fps) && isfield(S,'LSM') && isfield(S.LSM,'frameRateAttribute')
                 v = S.LSM.frameRateAttribute;
                 if v > 0
-                    fps      = v;
-                    fpsSource = 'Experiment.xml';
+                    fps       = v;
+                    fpsSource = 'xml file';
                 end
             end
-        catch ME
-            disp(['autoDetectAcqParams: could not read Experiment.xml (' ME.message ')']);
         end
+    catch ME
+        disp(['autoDetectAcqParams: could not read xml file (' ME.message ')']);
     end
 end
 

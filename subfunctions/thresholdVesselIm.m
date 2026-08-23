@@ -9,14 +9,27 @@ function [threshIm, skeleton]=thresholdVesselIm(rawIm, prefs)
 %INPUTS-
 %rawIm       : 2D image of vessel
 %thresh      : to remove background (noise) - std
+%prefs.smooth, prefs.smoothSigma : optional Gaussian pre-smoothing
+%                (added by Kira Shaw with Claude Code, Aug 2026) - blurs
+%                rawIm before the mean/std threshold is computed, so
+%                intensity noise doesn't get carried straight into the
+%                binary mask (and, downstream, into the skeleton).
+%                Off by default so existing behaviour is unchanged.
 %OUTPUTS-
 %threshIm    : 2D image of vessel, now thresholded
 %skeleton    : skeleton for thresholded image
 
 if nargin<2
     prefs.imgThresh = 0.5;
-    prefs.clean = 1; 
-end 
+    prefs.clean = 1;
+end
+if ~isfield(prefs, 'smooth'),      prefs.smooth      = 0; end
+if ~isfield(prefs, 'smoothSigma'), prefs.smoothSigma = 1; end
+
+if prefs.smooth
+    %Gaussian-smooth before thresholding to reduce speckle noise
+    rawIm = imgaussfilt(double(rawIm), prefs.smoothSigma);
+end
 
 % Threshold image
 %find mean intensity value of image

@@ -31,8 +31,10 @@ num_frames = numel(info); %number of frames (frames)
 %Initialize an empty array to store the tiff file in
 loadedTif = zeros(num_frames,width,height); %vessel channel
 
-%inform user loading tif files, slow process...
-disp('loading tiff files...');
+% (progress message removed here - Written by Kira Shaw with Claude Code,
+% Aug 2026 - the GUI's own status bar already shows "Loading TIF - please
+% wait..." before this function is called, for all 3 analysis types, so
+% printing it again to the command window was just noise)
 
 % open the file once and read directories in sequence (see speed note above)
 t = Tiff(tifLoc, 'r');

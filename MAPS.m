@@ -34,6 +34,14 @@ SC = max(SC, 0.55);                              % don't shrink past readable
 
 P = @(x,y,w,h) round([x y w h] * SC);            % scale a Position vector
 F = @(sz) max(7, round(sz * SC));                % scale a FontSize (floor 7pt)
+% uislider's InnerPosition height is hard-fixed at 3 px regardless of what
+% you ask for (see matlab.ui.control.Slider's PrivateInnerPosition default)
+% - scaling that 3 by SC on anything but a 1:1 screen rounds it away from 3
+% and MATLAB warns "The height of this component cannot be changed" on
+% every uislider call. Pslider scales x/y/w as usual but always passes the
+% unscaled 3 for height, so it matches what the slider forces anyway and
+% the warning never fires. (Written by Kira Shaw with Claude Code, Aug 2026)
+Pslider = @(x,y,w) [round([x y w] * SC), 3];
 
 figW = round(designW * SC);
 figH = round(designH * SC);
@@ -64,8 +72,21 @@ uilabel(fig, ...
     'FontColor',  [0.15 0.15 0.15]);
 uilabel(fig, ...
     'Position',   P(85,797,600,20), ...
-    'Text',       'Vessel diameter analysis from two-photon imaging', ...
+    'Text',       'Vascular analysis from two-photon imaging', ...
     'FontSize',   F(11), 'FontColor', [0.40 0.40 0.40]);
+
+% credit line, moved here from the bottom-right corner (Written by Kira
+% Shaw with Claude Code, Aug 2026) - the header has room to spare to the
+% right of the title, so it can run bigger here than it could squeezed
+% into the bottom strip. Widened (was 200px, x=1222) to fit the longer
+% two-author text without clipping - right edge held fixed at 1422 so it
+% still hugs the right edge the same way; the title ends well before
+% x=922 (its box ends at 785), so there's no risk of the two overlapping.
+uilabel(fig, ...
+    'Position',            P(922,818,500,24), ...
+    'Text',                'K Shaw & C N Hall (2026)', ...
+    'FontSize',            F(14), 'FontColor', [0.40 0.40 0.40], ...
+    'HorizontalAlignment', 'right');
 
 % thin separator line below header
 uipanel(fig, 'Position', P(0,782,1430,2), 'BackgroundColor', [0.7 0.7 0.75], ...
@@ -76,28 +97,71 @@ uipanel(fig, 'Position', P(0,782,1430,2), 'BackgroundColor', [0.7 0.7 0.75], ...
 % =============================================================================
 LX = 8;   LW = 415;
 
-% ---- Load Data + analysis dropdown ------------------------------------------
-btnLoad = uibutton(fig, ...
-    'Position',        P(LX,749,128,28), ...
+% ---- Setup: analysis type, then Load Data (Written by Kira Shaw with -------
+% Claude Code, Aug 2026) ------------------------------------------------------
+% Analysis type first, load second - you need to know which mode you're in
+% before loading (it decides how the file gets read in), so the order
+% matters, not just habit. Boxed as its own section (tinted background +
+% border) and both controls enlarged, so this "step 1/step 2" is obvious
+% rather than reading as just another row of controls. dispAx below is
+% shrunk by the same amount this box needs (45px), so nothing else moves.
+pnlSetup = uipanel(fig, ...
+    'Position',        P(LX,706,LW,76), ...
+    'BackgroundColor', [0.93 0.95 0.98], ...
+    'BorderType',      'line', ...
+    'HighlightColor',  [0.55 0.65 0.80]);
+
+uilabel(pnlSetup, 'Position', P(10,44,105,26), 'Text', 'Analysis type:', ...
+    'FontSize', F(13), 'FontWeight', 'bold', 'FontColor', [0.20 0.20 0.20]);
+ddAnalysis = uidropdown(pnlSetup, ...
+    'Position', P(120,44,LW-140,26), ...
+    'Items',    {'xyDiam', 'zstack', 'linescan'}, ...
+    'Value',    'xyDiam', 'FontSize', F(13), ...
+    'ValueChangedFcn', @(~,~) cb_analysisChanged());
+
+btnLoad = uibutton(pnlSetup, ...
+    'Position',        P(10,6,LW-20,32), ...
     'Text',            'Load Data', ...
-    'FontWeight',      'bold', ...
+    'FontSize',        F(14), 'FontWeight', 'bold', ...
     'BackgroundColor', [0.20 0.45 0.75], ...
     'FontColor',       [1 1 1], ...
     'ButtonPushedFcn', @(~,~) cb_loadData());
 
-uilabel(fig, 'Position', P(145,754,68,20), 'Text', 'Analysis:', ...
-    'FontColor', [0.25 0.25 0.25]);
-ddAnalysis = uidropdown(fig, ...
-    'Position', P(213,749,130,28), ...
-    'Items',    {'xyDiam', 'zstack', 'linescan'}, ...
-    'Value',    'xyDiam', 'FontSize', F(12));
-
 % ---- Vessel display axes ----------------------------------------------------
-uilabel(fig, 'Position', P(LX,729,250,18), ...
+lblDisplayHeader = uilabel(fig, 'Position', P(LX,684,250,18), ...
     'Text', 'Vessel display  (frame ~50)', ...
     'FontSize', F(10), 'FontColor', [0.35 0.35 0.35]);
 
-dispAx = uiaxes(fig, 'Position', P(LX,320,LW,406));
+% ---- Slant-correct (zstack only - Written by Kira Shaw with Claude Code,
+% Aug 2026) ----------------------------------------------------------------
+% Two independent ways of correcting the reported tissue volume for a
+% stack imaged at a slight angle to the surface, grouped under one
+% subheading since they're both answering the same underlying problem:
+% "Tissue signal" bins into ~10um z-slabs and tests raw intensity against
+% a near-black floor (see computeSlantCorrectedVolume); "Vessel boundary"
+% instead uses the actual thresholded vessel mask, per frame (see
+% computeBoundaryRestrictedVolume). Both off by default, both change the
+% reported numbers when on - see cb_slantOptionChanged for the
+% comparability warning either one posts when toggled. Sits directly
+% above the z-stack display, on the left with the rest of the processing
+% controls (moved here from the right panel originally, then widened to
+% fit both options) - dispAx is correspondingly shorter in zstack mode
+% (see cb_analysisChanged).
+lblSlantHeading = uilabel(fig, 'Position', P(LX,657,95,24), ...
+    'Text', 'Slant-correct:', 'FontSize', F(10), 'FontWeight', 'bold', ...
+    'FontColor', [0.25 0.25 0.25], 'Visible', 'off');
+chkSlantCorrect = uicheckbox(fig, ...
+    'Position', P(LX+98,657,160,24), ...
+    'Text',     'Tissue signal (10um)', ...
+    'Value',    false, 'FontSize', F(10), 'Visible', 'off', ...
+    'ValueChangedFcn', @(~,~) cb_slantOptionChanged());
+chkBoundaryRestrict = uicheckbox(fig, ...
+    'Position', P(LX+262,657,140,24), ...
+    'Text',     'Vessel boundary', ...
+    'Value',    false, 'FontSize', F(10), 'Visible', 'off', ...
+    'ValueChangedFcn', @(~,~) cb_slantOptionChanged());
+
+dispAx = uiaxes(fig, 'Position', P(LX,320,LW,361));
 dispAx.XTick = []; dispAx.YTick = [];
 dispAx.Box   = 'off';
 dispAx.Color = [0.88 0.88 0.90];
@@ -105,52 +169,222 @@ dispAx.Title.String = 'Pending vessel display';
 dispAx.Title.Color  = [0.45 0.45 0.45];
 axis(dispAx, 'equal');
 
-% ---- Processing options section ---------------------------------------------
-uilabel(fig, 'Position', P(LX,300,200,18), ...
-    'Text', 'Processing options', ...
-    'FontSize', F(12), 'FontWeight', 'bold', 'FontColor', [0.15 0.15 0.15]);
+% ---- Z-stack frame slider (zstack only) --------------------------------------
+% Written by Kira Shaw with Claude Code, Aug 2026.
+% Sits in the strip freed up when dispAx shrinks for zstack mode (see
+% cb_analysisChanged). ValueChangingFcn fires live during drag so the
+% displayed frame - and its threshold preview - updates as you scrub.
+% Written by Kira Shaw with Claude Code, Aug 2026 - strip widened (dispAx's
+% zstack bottom raised 346->366, slider/label pushed up to match) after
+% the Preprocessing panel below grew tall enough to sit under the
+% slider's real footprint (labels included, well beyond its 3px inner
+% track - same issue as sldManualThresh, see Pslider above).
+zSlider = uislider(fig, ...
+    'Position',         Pslider(LX+6,352,LW-70), ...
+    'Limits',           [1 2], 'Value', 1, ...
+    'Visible',          'off', ...
+    'ValueChangingFcn', @(~,ev) cb_zSliderChanging(ev.Value, true), ...
+    'ValueChangedFcn',  @(src,~) cb_zSliderChanging(src.Value, false));
+lblZFrame = uilabel(fig, ...
+    'Position',            P(LX+LW-58,340,58,18), ...
+    'Text',                '1 / 1', ...
+    'FontSize',            F(9), 'FontColor', [0.35 0.35 0.35], ...
+    'HorizontalAlignment', 'right', 'Visible', 'off');
 
-btnSkel = uibutton(fig, ...
-    'Position',        P(LX,265,172,28), ...
+% ---- Processing options section (xyDiam) -------------------------------------
+% Boxed to match the zstack side's Preprocessing panel (Written by Kira
+% Shaw with Claude Code, Aug 2026) - same native-title/border/tint
+% treatment, just for consistency between the two modes.
+pnlProcOptions = uipanel(fig, ...
+    'Position',        P(LX,212,LW,96), ...
+    'Title',           'Processing options', ...
+    'FontWeight',      'bold', ...
+    'BackgroundColor', [0.97 0.97 0.98]);
+
+btnSkel = uibutton(pnlProcOptions, ...
+    'Position',        P(LX,44,172,28), ...
     'Text',            'Generate skeleton', ...
+    'FontSize',        F(11), ...
     'ButtonPushedFcn', @(~,~) cb_generateSkeleton());
 
-lblSkelTick = uilabel(fig, 'Position', P(188,263,30,30), ...
+lblSkelTick = uilabel(pnlProcOptions, 'Position', P(188,42,30,30), ...
     'Text', '', 'FontSize', F(20), 'FontColor', [0.10 0.70 0.20]);
 
-btnBranch = uibutton(fig, ...
-    'Position',        P(LX,228,210,28), ...
+btnBranch = uibutton(pnlProcOptions, ...
+    'Position',        P(LX,8,210,28), ...
     'Text',            'Draw around vessel branch', ...
+    'FontSize',        F(11), ...
     'ButtonPushedFcn', @(~,~) cb_drawBranch());
 
-lblBranchTick = uilabel(fig, 'Position', P(226,226,30,30), ...
+lblBranchTick = uilabel(pnlProcOptions, 'Position', P(226,6,30,30), ...
     'Text', '', 'FontSize', F(20), 'FontColor', [0.10 0.70 0.20]);
 
+% group of xyDiam-only left-panel controls, shown/hidden as one by the
+% Analysis dropdown (see cb_analysisChanged)
+xyDiamLeftH = [pnlProcOptions, btnSkel, lblSkelTick, btnBranch, lblBranchTick];
+
+% ---- Preprocessing panel (zstack) ------------------------------------------
+% Written by Kira Shaw with Claude Code, Aug 2026.
+% Everything that shapes the binary mask before skeletonising lives here
+% together: threshold (auto/manual, per-range), smoothing, and skeleton
+% pruning - now its own boxed section (native panel title + border,
+% matching Parameters below and Setup above) rather than a bare label +
+% loose controls. Auto threshold (Otsu for now - more methods can be added
+% to ddThreshMethod's Items later without changing this layout) sets the
+% whole-stack default. Manual threshold reveals a slider that nudges the
+% *active* segment's value (the one covering whatever frame is currently
+% shown). Start/End range lets you carve out a sub-range of frames (e.g.
+% deeper slices needing a different value) and give it its own threshold,
+% on top of the whole-stack default.
+%
+% The manual-threshold slider used to sit only 6px above the smoothing row
+% below it - fine for its 3px *inner* track, but a uislider's actual
+% rendered footprint (value labels included) is much taller than that
+% (~39px, per its own default OuterPosition), so the smoothing row was
+% genuinely being rendered over by the slider's label area. Every row
+% below the slider now sits further down to give it real clearance.
+% Reorganised again (Written by Kira Shaw with Claude Code, Aug 2026):
+% Smooth moved up to sit with Auto/Manual threshold (it shapes the raw
+% vessel data, same as thresholding does); Skeleton preview + Prune length
+% now form their own row at the bottom, next to the Start/End range
+% buttons - ticking Skeleton preview overlays a quick 2D skeleton on the
+% current thresholded frame (see renderZFrame), so nudging Prune length
+% shows its effect immediately without running the full 3D "Process
+% Stack". Panel grown a little (top nudged up from y=300 to y=308, and
+% Parameters below tightened a touch more) to fit the extra row.
+pnlPreprocessing = uipanel(fig, ...
+    'Position',        P(LX,136,LW,187), ...
+    'Title',           'Preprocessing', ...
+    'FontWeight',      'bold', ...
+    'BackgroundColor', [0.97 0.97 0.98], ...
+    'Visible',         'off');
+
+% One consistent font size across every control in this panel (Written by
+% Kira Shaw with Claude Code, Aug 2026) - some had an explicit smaller
+% size and some were left at the (larger) default, which read as
+% inconsistent side by side. PPFS = "Preprocessing panel font size".
+PPFS = F(11);
+
+% Auto threshold first, Smooth right below it (swapped - Written by Kira
+% Shaw with Claude Code, Aug 2026) - both shape the raw vessel data before
+% skeletonising, grouped together.
+chkAutoThresh = uicheckbox(pnlPreprocessing, ...
+    'Position',        P(LX,139,150,22), ...
+    'Text',            'Auto threshold', ...
+    'Value',           false, 'FontSize', PPFS, ...
+    'ValueChangedFcn', @(~,~) cb_autoThreshChanged());
+ddThreshMethod = uidropdown(pnlPreprocessing, ...
+    'Position',        P(190,139,150,22), ...
+    'Items',           {'Otsu (recommended)', 'IsoData', 'Triangle'}, ...
+    'Value',           'Otsu (recommended)', 'FontSize', PPFS, ...
+    'Enable',          'off', ...
+    'ValueChangedFcn', @(~,~) cb_methodChanged());
+
+chkSmooth = uicheckbox(pnlPreprocessing, ...
+    'Position',        P(LX,114,80,22), ...
+    'Text',            'Smooth', ...
+    'Value',           false, 'FontSize', PPFS, ...
+    'ValueChangedFcn', @(~,~) cb_smoothChanged());
+lblSmoothSigma = uilabel(pnlPreprocessing, 'Position', P(LX+84,114,14,22), ...
+    'Text', char(963), 'FontSize', PPFS, 'FontColor', [0.25 0.25 0.25]);  % sigma
+efSmoothSigma = uieditfield(pnlPreprocessing, 'numeric', ...
+    'Position',        P(LX+100,114,42,22), ...
+    'Value',           1, 'Limits', [0.1 10], 'FontSize', PPFS, ...
+    'ValueChangedFcn', @(~,~) cb_smoothChanged());
+
+% manual threshold checkbox + its slider share one row (checkbox top-
+% aligned, slider's true footprint given room below it - a uislider's
+% rendered footprint, labels included, is far taller than its 3px inner
+% track - see Pslider above). Shifted up 15px from where it first landed
+% (Written by Kira Shaw with Claude Code, Aug 2026) - screenshotted proof
+% that clearance still wasn't enough: the slider's tick labels were
+% crowding into Start/End range below it. Panel had spare, unused height
+% at the bottom (below Skeleton preview) that's now used here instead -
+% kept to +15 (not more) to leave a margin below the z-frame slider above
+% this panel, which had the same kind of clearance issue fixed earlier.
+chkManualThresh = uicheckbox(pnlPreprocessing, ...
+    'Position',        P(LX,89,145,22), ...
+    'Text',            'Manual threshold', ...
+    'Value',           false, 'FontSize', PPFS, 'Enable', 'off', ...
+    'ValueChangedFcn', @(~,~) cb_manualThreshChanged());
+sldManualThresh = uislider(pnlPreprocessing, ...
+    'Position',         Pslider(165,95,LW-181), ...
+    'Limits',           [0 1], 'Value', 0, ...
+    'Enable',           'off', ...
+    'ValueChangingFcn', @(~,ev)  cb_manualSliderChanging(ev.Value, true), ...
+    'ValueChangedFcn',  @(src,~) cb_manualSliderChanging(src.Value, false));
+
+% Start/End range apply to whichever threshold mode (auto/manual) is
+% current, so they sit with the threshold controls, not down with
+% skeleton preview (Written by Kira Shaw with Claude Code, Aug 2026).
+btnRangeStart = uibutton(pnlPreprocessing, ...
+    'Position',        P(LX,31,172,26), ...
+    'Text',            'Start range', ...
+    'FontSize',        PPFS, 'Enable', 'off', ...
+    'ButtonPushedFcn', @(~,~) cb_rangeStart());
+btnRangeEnd = uibutton(pnlPreprocessing, ...
+    'Position',        P(196,31,172,26), ...
+    'Text',            'End range && apply', ...
+    'FontSize',        PPFS, 'Enable', 'off', ...
+    'ButtonPushedFcn', @(~,~) cb_rangeEnd());
+
+% ---- Skeleton preview (Written by Kira Shaw with Claude Code, Aug 2026) ---
+% Quick 2D skeleton of the current thresholded frame, overlaid live on the
+% preview above - lets pruning be tuned by eye rather than by trial and
+% error against the full 3D "Process Stack" run (see renderZFrame).
+chkSkelPreview = uicheckbox(pnlPreprocessing, ...
+    'Position',        P(LX,2,120,22), ...
+    'Text',            'Skeleton preview', ...
+    'Value',           false, 'FontSize', PPFS, ...
+    'ValueChangedFcn', @(~,~) cb_skelPreviewChanged());
+lblPruneLen = uilabel(pnlPreprocessing, 'Position', P(LX+124,2,75,22), ...
+    'Text', 'Prune (vox):', 'FontSize', PPFS, 'FontColor', [0.25 0.25 0.25]);
+efPruneLen = uieditfield(pnlPreprocessing, 'numeric', ...
+    'Position',        P(LX+202,2,45,22), ...
+    'Value',           10, 'Limits', [0 Inf], 'FontSize', PPFS, ...
+    'ValueChangedFcn', @(~,~) cb_prunePreviewChanged());
+
+zstackLeftH = [pnlPreprocessing, chkAutoThresh, ddThreshMethod, chkManualThresh, ...
+    sldManualThresh, chkSmooth, lblSmoothSigma, efSmoothSigma, chkSkelPreview, ...
+    lblPruneLen, efPruneLen, btnRangeStart, btnRangeEnd, ...
+    lblSlantHeading, chkSlantCorrect, chkBoundaryRestrict];
+
 % ---- Parameters panel -------------------------------------------------------
+% Shrunk to 80px tall (was 88px) - just tighter gaps/padding, the fields
+% themselves are unchanged - to give the Preprocessing panel above the
+% room it needs. Written by Kira Shaw with Claude Code, Aug 2026.
 pnl = uipanel(fig, ...
-    'Position',        P(LX,52,LW,170), ...
+    'Position',        P(LX,52,LW,80), ...
     'Title',           'Parameters', ...
     'FontWeight',      'bold', ...
     'BackgroundColor', [1 1 1]);
 
-uilabel(pnl, 'Position', P(10,115,115,22), 'Text', 'No. of branches:');
+% row 1 is mode-dependent: xyDiam wants no. of branches, zstack wants
+% z-step (which xyDiam has no use for) - same slot, toggled visibility
+lblNBranch = uilabel(pnl, 'Position', P(10,42,110,18), ...
+    'Text', 'No. of branches:', 'FontSize', F(10));
 efNBranch = uieditfield(pnl, 'numeric', ...
-    'Position', P(130,115,55,22), 'Value', 1, 'Limits', [1 5]);
+    'Position', P(122,42,45,18), 'Value', 1, 'Limits', [1 5], 'FontSize', F(10));
 
-uilabel(pnl, 'Position', P(10,80,115,22), 'Text', 'Pixel size (microns):');
+lblZstep = uilabel(pnl, 'Position', P(10,42,110,18), ...
+    'Text', 'Z-step (microns):', 'FontSize', F(10), 'Visible', 'off');
+efZstep = uieditfield(pnl, 'text', ...
+    'Position', P(122,42,80,18), 'Value', '', 'FontSize', F(10), ...
+    'Placeholder', 'blank = n/a', 'Visible', 'off');
+
+uilabel(pnl, 'Position', P(10,22,110,18), ...
+    'Text', 'Pixel size (microns):', 'FontSize', F(10));
 efPxsz = uieditfield(pnl, 'text', ...
-    'Position', P(130,80,100,22), 'Value', '', 'Placeholder', 'blank = pixels');
+    'Position', P(122,22,80,18), 'Value', '', 'FontSize', F(10), ...
+    'Placeholder', 'blank = pixels');
 
-uilabel(pnl, 'Position', P(10,46,115,22), 'Text', 'Frame rate (Hz):');
+uilabel(pnl, 'Position', P(10,2,110,18), ...
+    'Text', 'Frame rate (Hz):', 'FontSize', F(10));
 efFPS = uieditfield(pnl, 'text', ...
-    'Position', P(130,46,100,22), 'Value', '', 'Placeholder', 'blank = frames');
+    'Position', P(122,2,80,18), 'Value', '', 'FontSize', F(10), ...
+    'Placeholder', 'blank = frames');
 
-uilabel(pnl, 'Position', P(10,12,LW-20,28), ...
-    'Text',      'Leave blank to output diameter in pixels / time in frames.', ...
-    'FontSize',  F(9), 'FontColor', [0.50 0.50 0.50], ...
-    'WordWrap',  'on');
-
-% ---- GO button --------------------------------------------------------------
+% ---- GO button (xyDiam) ------------------------------------------------------
 btnGo = uibutton(fig, ...
     'Position',        P(LX,14,LW,33), ...
     'Text',            'GO', ...
@@ -158,6 +392,17 @@ btnGo = uibutton(fig, ...
     'BackgroundColor', [0.12 0.55 0.20], ...
     'FontColor',       [1 1 1], ...
     'ButtonPushedFcn', @(~,~) cb_go());
+
+% ---- zstack equivalent of GO --------------------------------------------------
+% Written by Kira Shaw with Claude Code, Aug 2026.
+btnZAnalyze = uibutton(fig, ...
+    'Position',        P(LX,14,LW,33), ...
+    'Text',            'Process Stack', ...
+    'FontSize',        F(15), 'FontWeight', 'bold', ...
+    'BackgroundColor', [0.12 0.55 0.20], ...
+    'FontColor',       [1 1 1], ...
+    'Enable',          'off', 'Visible', 'off', ...
+    'ButtonPushedFcn', @(~,~) cb_zAnalyze());
 
 % =============================================================================
 %  RIGHT PANEL  (x = 435, width = 985)
@@ -174,8 +419,8 @@ txaUpdates = uitextarea(fig, ...
     'Value',    'Load data to begin.', ...
     'FontSize', F(11));
 
-% ---- Diameter heatmap axes --------------------------------------------------
-uilabel(fig, 'Position', P(RX,708,350,18), ...
+% ---- Diameter heatmap axes (xyDiam) -------------------------------------------
+lblHeatmap = uilabel(fig, 'Position', P(RX,708,350,18), ...
     'Text', 'Diameter map', ...
     'FontSize', F(10), 'FontWeight', 'bold', 'FontColor', [0.25 0.25 0.25]);
 heatAx = uiaxes(fig, 'Position', P(RX,415,RW,290));
@@ -185,8 +430,8 @@ heatAx.YColor  = [0.30 0.30 0.30];
 colormap(heatAx, 'parula');
 xlabel(heatAx, 'Frame');  ylabel(heatAx, 'Skeleton pt');
 
-% ---- Average diameter trace axes --------------------------------------------
-uilabel(fig, 'Position', P(RX,393,350,18), ...
+% ---- Average diameter trace axes (xyDiam) -------------------------------------
+lblTrace = uilabel(fig, 'Position', P(RX,393,350,18), ...
     'Text', 'Average diameter  (mean across skeleton pts)', ...
     'FontSize', F(10), 'FontWeight', 'bold', 'FontColor', [0.25 0.25 0.25]);
 traceAx = uiaxes(fig, 'Position', P(RX,55,RW,335));
@@ -194,6 +439,146 @@ traceAx.Color  = [0.97 0.97 0.97];
 traceAx.XColor = [0.30 0.30 0.30];
 traceAx.YColor = [0.30 0.30 0.30];
 hold(traceAx, 'on');
+
+% group of xyDiam-only right-panel content, shown/hidden as one
+xyDiamRightH = [lblHeatmap, heatAx, lblTrace, traceAx];
+
+% ---- Threshold segments table (zstack) ---------------------------------------
+% Written by Kira Shaw with Claude Code, Aug 2026.
+% One row per frame-range: the whole-stack default plus any per-range
+% overrides added via Start/End range on the left. Shrunk to leave room
+% below for the density results grid (added when "Calculate Vascular
+% Density" is built out - see cb_zAnalyze).
+lblSegments = uilabel(fig, 'Position', P(RX,708,450,18), ...
+    'Text', 'Threshold segments  (per frame-range overrides)', ...
+    'FontSize', F(10), 'FontWeight', 'bold', 'FontColor', [0.25 0.25 0.25], ...
+    'Visible', 'off');
+
+% (Correct volume for tissue slant used to sit here - moved to the left
+% panel, next to the z-stack display, in Aug 2026 - it's a processing
+% control like everything else on that side, not a results-panel item)
+% shrunk from 125 to 95 to 85px tall (Written by Kira Shaw with Claude
+% Code, Aug 2026) to give the density box below room, most recently for
+% its 4th line (a labelled title row, "Full tissue:"/"Boundary
+% restricted:", on top of density/tortuosity/volume/distance) - its top
+% edge (y=705) is unchanged from before, only its bottom edge moved up.
+tblSegments = uitable(fig, ...
+    'Position',   P(RX,620,RW,85), ...
+    'ColumnName', {'Start frame', 'End frame', 'Mode', 'Threshold value'}, ...
+    'Data',       cell(0,4), ...
+    'Visible',    'off');
+
+% (smoothing/pruning controls used to sit here - moved to the left panel's
+% Preprocessing block, alongside threshold, in Aug 2026)
+
+% ---- Density results (zstack) -------------------------------------------------
+% Written by Kira Shaw with Claude Code, Aug 2026.
+% Density is only meaningful alongside the tissue volume it was measured
+% over (a 50-slice and a 100-slice stack aren't comparable otherwise), so
+% both are always shown together here, plus the tissue-to-vessel distance
+% percentiles - all in a highlighted box (cf. Nature Comms 2021
+% 10.1038/s41467-021-23508-y, fig 7) so the headline numbers stand out
+% from the plots around them, rather than reading as just another label.
+% Grown from 88 to 100px tall (Written by Kira Shaw with Claude Code, Aug
+% 2026) to fit a 4th text line (see RESULTS_FS below) - its bottom edge
+% (y=516) is unchanged, tblSegments above gave up the matching 12px.
+pnlDensity = uipanel(fig, ...
+    'Position',        P(RX,516,RW,100), ...
+    'BackgroundColor', [0.87 0.95 0.83], ...
+    'BorderType',      'line', ...
+    'HighlightColor',  [0.55 0.75 0.50], ...
+    'Visible',         'off');
+% Written by Kira Shaw with Claude Code, Aug 2026. Both labels share one
+% font size (RESULTS_FS) - previously the primary text was F(16) against
+% the boundary text's F(12); both boxes also now follow the exact same
+% 4-line structure (title / density+tortuosity / volume / distance) so
+% the two sides read as one standardised results box rather than two
+% differently-formatted ones. F(13), a bit bigger than the old shared
+% F(12), fits the panel's new extra height.
+RESULTS_FS = F(13);
+lblDensity = uilabel(pnlDensity, ...
+    'Position',  P(10,4,580,92), ...
+    'Text',      {'Full tissue:', 'run "Process Stack" first'}, ...
+    'FontSize',  RESULTS_FS, 'FontWeight', 'bold', 'FontColor', [0.10 0.35 0.10], ...
+    'BackgroundColor', [0.87 0.95 0.83]);
+% Boundary-restricted results (2nd density measure - see
+% computeBoundaryRestrictedVolume), on the RHS of the same box, in a
+% distinct yellow colour rather than a separate box, since there's room
+% here and it's a companion set of numbers, not an unrelated one (Written
+% by Kira Shaw with Claude Code, Aug 2026). Same yellow ([0.80 0.65 0.0],
+% "BOUNDARY_YELLOW") is reused for the boundary overlay line drawn on the
+% stack display and in the export figure, so the results box colour and
+% the outline it corresponds to visually match.
+% Shifted left and widened (was x=600, width=375; then x=575 - still not
+% enough) - Written by Kira Shaw with Claude Code, Aug 2026. The longest
+% line (the distance-percentile one) was being clipped mid-number
+% ("...95th pct 98...") because the label itself was too narrow for it,
+% not just positioned badly - moving the box alone without widening it
+% just shifts where the same clipping happens. x=545/width=435 (right
+% edge 980, still inside the panel's own 985 width) gives it noticeably
+% more room; checked against lblDensity's actual rendered text (which
+% only reaches partway across its own 580px box, per screenshot) so this
+% doesn't visually collide with it despite the two boxes' declared
+% bounds now overlapping on paper.
+lblDensityBoundary = uilabel(pnlDensity, ...
+    'Position',  P(545,4,435,92), ...
+    'Text',      {'Boundary restricted:', ''}, ...
+    'FontSize',  RESULTS_FS, 'FontWeight', 'bold', 'FontColor', [0.80 0.65 0.00], ...
+    'BackgroundColor', [0.87 0.95 0.83]);
+
+% Top row (2 cols): skeleton | distance map - images, so wider.
+% Bottom row (4 cols, was 3): diameter-by-depth | length-by-depth |
+% distance histogram | tortuosity-by-depth (Written by Kira Shaw with
+% Claude Code, Aug 2026 - rejigged from 3 to 4 columns to fit it in).
+% row gap widened to 45px (was 10) - the bottom row's titles are two lines
+% (name + stats line), which need more headroom above them than a single-
+% line title does, or they crowd into the row above.
+gridH = 200;
+gridY = @(row) 55 + (2-row)*(gridH+45);   % row 1 = top, row 2 = bottom
+
+imgW = floor((RW - 10) / 2);
+imgX = @(col) RX + (col-1)*(imgW+10);
+pltW = floor((RW - 30) / 4);
+pltX = @(col) RX + (col-1)*(pltW+10);
+
+axSkel = uiaxes(fig, 'Position', P(imgX(1), gridY(1), imgW, gridH), 'Visible', 'off');
+axSkel.XTick = []; axSkel.YTick = [];
+title(axSkel, 'Skeleton  (max projection)');
+
+axDist = uiaxes(fig, 'Position', P(imgX(2), gridY(1), imgW, gridH), 'Visible', 'off');
+axDist.XTick = []; axDist.YTick = [];
+title(axDist, 'Distance to nearest vessel  (max projection, um)');
+
+axDiamDepth = uiaxes(fig, 'Position', P(pltX(1), gridY(2), pltW, gridH), 'Visible', 'off');
+title(axDiamDepth, 'Diameter by depth');
+xlabel(axDiamDepth, 'Depth (um)');  ylabel(axDiamDepth, 'Diameter (um)');
+
+axLengthDepth = uiaxes(fig, 'Position', P(pltX(2), gridY(2), pltW, gridH), 'Visible', 'off');
+title(axLengthDepth, 'Length by depth');
+xlabel(axLengthDepth, 'Depth (um)');  ylabel(axLengthDepth, 'Length (um)');
+
+% tortuosity = actual (skeleton) path length / straight-line ("as the
+% crow flies") distance between a branch's start and end - 1 is perfectly
+% straight, higher is more tortuous (Written by Kira Shaw with Claude
+% Code, Aug 2026; see extractBranches). Swapped with the histogram below
+% (was slot 4, now slot 3) to match the pop-out figure's order.
+axTortDepth = uiaxes(fig, 'Position', P(pltX(3), gridY(2), pltW, gridH), 'Visible', 'off');
+title(axTortDepth, 'Tortuosity by depth');
+xlabel(axTortDepth, 'Depth (um)');  ylabel(axTortDepth, 'Tortuosity');
+
+axDistHist = uiaxes(fig, 'Position', P(pltX(4), gridY(2), pltW, gridH), 'Visible', 'off');
+title(axDistHist, 'Distance to nearest vessel');
+xlabel(axDistHist, 'Distance (um)');  ylabel(axDistHist, '% of tissue');
+
+% ---- visibility groups (Written by Kira Shaw with Claude Code, Aug 2026) ----
+% zstackRightH: settings, shown as soon as zstack mode is picked.
+% zstackResultsH: the results grid + density headline - stays blank/hidden
+% until "Process Stack" has actually produced something (see
+% cb_analysisChanged, resetDensityDisplay, cb_zAnalyze), instead of
+% showing a wall of empty titled axes from the moment zstack is selected.
+zstackRightH   = [lblSegments, tblSegments];
+zstackResultsH = [pnlDensity, axSkel, axDist, axDiamDepth, axLengthDepth, ...
+    axDistHist, axTortDepth];
 
 % ---- Export buttons (data and figure, side by side) -------------------------
 btnW2 = floor((RW-10)/2);   % width of each button
@@ -215,12 +600,6 @@ btnExportFig = uibutton(fig, ...
     'Enable',          'off', ...
     'ButtonPushedFcn', @(~,~) cb_exportFig());
 
-% ---- credit line, bottom-right corner --------------------------------------
-uilabel(fig, ...
-    'Position',            P(RX+RW-140,1,140,12), ...
-    'Text',                'Shaw (2026)', ...
-    'FontSize',            F(9), 'FontColor', [0.40 0.40 0.40], ...
-    'HorizontalAlignment', 'right');
 
 % =============================================================================
 %  INITIAL STATE
@@ -241,6 +620,54 @@ state.timeUnit      = 'frames';
 state.skelDrawn     = false;
 state.branchesDrawn = false;
 state.analysisRun   = false;
+
+% ---- zstack mode state (Written by Kira Shaw with Claude Code, Aug 2026) ----
+state.zRaw          = [];      % loaded z-stack, frames x H x W
+state.zNumFrames    = 0;
+state.zCurrentFrame = 1;
+state.zStep_um      = NaN;
+% segments: struct array, one row per frame-range - startF, endF (inclusive,
+% 1-indexed), mode ('auto'/'manual'), value (threshold in raw data units).
+% Empty = no threshold applied yet (raw display).
+state.zSegments     = struct('startF', {}, 'endF', {}, 'mode', {}, 'value', {});
+state.zRangeStart   = [];       % frame marked by "Start range"; [] = none pending
+
+% ---- z-stack smoothing + pruning (Written by Kira Shaw with Claude Code,
+% Aug 2026) --------------------------------------------------------------
+% zWorkVol is the volume threshold/skeleton logic actually reads from -
+% double(zRaw) when smoothing is off, Gaussian-smoothed when it's on, kept
+% in sync by refreshZWorkVol(). zRaw itself is left untouched so the "raw"
+% display mode always shows the true data.
+state.zSmooth       = false;
+state.zSmoothSigma  = 1;        % pixels, Gaussian sigma
+state.zPruneLen     = 10;       % voxels, bwskel MinBranchLength
+state.zSkelPreview  = false;    % live 2D skeleton overlay on the current frame
+state.zWorkVol      = [];
+
+% ---- vascular density analysis results (Written by Kira Shaw with Claude
+% Code, Aug 2026) --------------------------------------------------------
+state.zBranches        = [];    % table: length_um, diam_um, depth_um per branch
+state.zVolume_mm3       = NaN;
+state.zVolumeHWZ_um     = [NaN NaN NaN];   % [height width depth], for display
+state.zDensity_mPerMm3  = NaN;
+state.zTortuosity_mean  = NaN;  % mean actual/chord length ratio across branches
+state.zSlantCorrected   = false; % whether the last run used slant-corrected volume
+state.zDistVals_um      = [];   % sampled tissue-to-vessel distances, for the histogram
+state.zDistP50_um       = NaN;  % 50th/95th percentile tissue-to-vessel distance
+state.zDistP95_um       = NaN;
+% boundary-restricted (2nd density measure, per-frame convex hull of the
+% vessel mask) - Written by Kira Shaw with Claude Code, Aug 2026
+state.zVolume_boundaryRestricted_mm3      = NaN;
+state.zDensity_boundaryRestricted_mPerMm3 = NaN;
+state.zDistVals_boundaryRestricted_um     = [];
+state.zDistP50_boundaryRestricted_um      = NaN;
+state.zDistP95_boundaryRestricted_um      = NaN;
+state.zBoundaryRestrictApplied = false;   % whether the last run computed this measure
+state.zBoundaryCoords   = {};   % per-frame boundary outline [x y] coords, original grid
+state.zBoundaryMaskVol  = [];   % cached, for the export figure's boundary overlay
+state.zSkelVol          = [];   % cached skeleton volume, for the export "stacked slices" view
+state.zDistMapVol       = [];   % cached distance-map volume, same purpose
+state.zAnalysisRun      = false;
 setappdata(fig, 'state', state);
 
 % =============================================================================
@@ -249,9 +676,21 @@ setappdata(fig, 'state', state);
 
     % =========================================================================
     function cb_loadData()
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % Used to pass cd (current directory) straight through as the
+        % dialog's starting folder. MATLAB's file chooser can reject that
+        % outright ("'Initial file path' must be ... a valid path") if the
+        % current directory isn't one it's happy with right now (e.g. a
+        % OneDrive folder that isn't fully available) - validate first and
+        % fall back to '' (dialog's own default) rather than erroring out
+        % of Load Data entirely before the file picker even opens.
+        startDir = pwd;
+        if isempty(startDir) || ~isfolder(startDir)
+            startDir = '';
+        end
         [tifName, tifFolder] = uigetfile( ...
             {'*.tif;*.tiff', 'TIF files (*.tif, *.tiff)'}, ...
-            'Select vessel TIF file', cd);
+            'Select vessel TIF file', startDir);
         if isequal(tifName, 0), return; end
         tifPath = fullfile(tifFolder, tifName);
         expDir  = tifFolder;
@@ -259,52 +698,1473 @@ setappdata(fig, 'state', state);
         postUpdate('Loading TIF — please wait...');
         rawVess = loadTifFileIn2Mat(tifPath);
 
-        s             = getappdata(fig, 'state');
-        s.rawVess     = rawVess;
-        s.expDir      = expDir;
-        s.frame50     = squeeze(rawVess(min(50, size(rawVess,1)), :, :));
-        s.skeletons   = {};  s.masks     = {};
-        s.perpEndpts  = {};  s.cont_diams = {};
-        s.skelDrawn   = false;  s.branchesDrawn = false;
-        s.analysisRun = false;
-        setappdata(fig, 'state', s);
+        s            = getappdata(fig, 'state');
+        s.expDir     = expDir;
 
-        % show frame in display axes
-        refreshDisplay(s, {}, {});
-
-        lblSkelTick.Text    = '';
-        lblBranchTick.Text  = '';
-        btnExport.Enable    = 'off';
-        btnExportFig.Enable = 'off';
-        cla(heatAx);  cla(traceAx);  hold(traceAx, 'on');
-
-        % ---- try to auto-fill pixel size / fps -------------------------
+        % ---- auto-detect pixel size / fps / z-step, shared by both modes ---
         % Checks the TIF's own metadata first, then falls back to an
-        % accompanying .ini (Scientifica) or Experiment.xml (ThorLabs) in
-        % expDir. Anything not found is left blank for manual entry, same
-        % as before.
-        [pxsz_auto, fps_auto, pxSrc, fpsSrc] = autoDetectAcqParams(tifPath, expDir);
-
-        msgParts = {sprintf('Loaded: %s   (%d frames, %d x %d px)', ...
-            tifName, size(rawVess,1), size(rawVess,2), size(rawVess,3))};
+        % accompanying .ini (Scientifica) or .xml (ThorLabs) file found
+        % anywhere under expDir - by extension, not by an assumed filename
+        % (see autoDetectAcqParams.m). Anything not found is left blank
+        % for manual entry.
+        [pxsz_auto, fps_auto, zstep_auto, pxSrc, fpsSrc] = ...
+            autoDetectAcqParams(tifPath, expDir);
 
         if ~isnan(pxsz_auto)
             efPxsz.Value = num2str(pxsz_auto, '%.4g');
-            msgParts{end+1} = sprintf('Pixel size auto-filled: %.4g um (%s).', pxsz_auto, pxSrc);
         else
             efPxsz.Value = '';
-            msgParts{end+1} = 'Pixel size not found in TIF/ini/xml - enter manually.';
         end
-
         if ~isnan(fps_auto)
             efFPS.Value = num2str(fps_auto, '%.4g');
-            msgParts{end+1} = sprintf('Frame rate auto-filled: %.4g Hz (%s).', fps_auto, fpsSrc);
         else
             efFPS.Value = '';
+        end
+        if ~isnan(zstep_auto)
+            efZstep.Value = num2str(zstep_auto, '%.4g');
+        else
+            efZstep.Value = '';
+        end
+
+        if strcmp(ddAnalysis.Value, 'zstack')
+            % ---- zstack setup ---------------------------------------------
+            s.zRaw          = rawVess;
+            s.zNumFrames    = size(rawVess, 1);
+            s.zCurrentFrame = 1;
+            s.zStep_um      = zstep_auto;
+            s.zSegments     = struct('startF', {}, 'endF', {}, 'mode', {}, 'value', {});
+            s.zRangeStart   = [];
+            s.zBranches       = [];
+            s.zVolume_mm3     = NaN;
+            s.zVolumeHWZ_um   = [NaN NaN NaN];
+            s.zDensity_mPerMm3 = NaN;
+            s.zTortuosity_mean = NaN;
+            s.zSlantCorrected = false;
+            s.zDistVals_um    = [];
+            s.zDistP50_um     = NaN;
+            s.zDistP95_um     = NaN;
+            s.zVolume_boundaryRestricted_mm3      = NaN;
+            s.zDensity_boundaryRestricted_mPerMm3 = NaN;
+            s.zDistVals_boundaryRestricted_um     = [];
+            s.zDistP50_boundaryRestricted_um      = NaN;
+            s.zDistP95_boundaryRestricted_um      = NaN;
+            s.zBoundaryRestrictApplied = false;
+            s.zBoundaryCoords = {};
+            s.zBoundaryMaskVol = [];
+            s.zSkelVol        = [];
+            s.zDistMapVol     = [];
+            s.zAnalysisRun    = false;
+            s.zSmooth         = false;
+            s.zSmoothSigma    = 1;
+            s.zPruneLen       = 10;
+            s.zSkelPreview    = false;
+            s.zWorkVol        = double(rawVess);
+            setappdata(fig, 'state', s);
+
+            zSlider.Limits = [1, max(2, s.zNumFrames)];  % Limits can't collapse to a point
+            zSlider.Value  = 1;
+            lblZFrame.Text = sprintf('1 / %d', s.zNumFrames);
+
+            chkAutoThresh.Value    = false;
+            chkManualThresh.Value  = false;
+            chkManualThresh.Enable = 'off';
+            sldManualThresh.Enable = 'off';
+            ddThreshMethod.Enable  = 'off';
+            btnRangeStart.Enable   = 'off';
+            btnRangeEnd.Enable     = 'off';
+            btnZAnalyze.Enable     = 'off';
+            chkSmooth.Value        = false;
+            efSmoothSigma.Value    = 1;
+            efPruneLen.Value       = 10;
+            chkSkelPreview.Value   = false;
+            chkSlantCorrect.Value  = false;
+            chkBoundaryRestrict.Value = false;
+
+            resetDensityDisplay();
+            renderZFrame(s);
+            refreshSegmentsTable(s);
+
+            msg = sprintf('Loaded: %s   (%d slices, %d x %d px)', ...
+                tifName, s.zNumFrames, size(rawVess,2), size(rawVess,3));
+        else
+            % ---- xyDiam setup (unchanged) -----------------------------------
+            s.rawVess     = rawVess;
+            s.frame50     = squeeze(rawVess(min(50, size(rawVess,1)), :, :));
+            s.skeletons   = {};  s.masks     = {};
+            s.perpEndpts  = {};  s.cont_diams = {};
+            s.skelDrawn   = false;  s.branchesDrawn = false;
+            s.analysisRun = false;
+            setappdata(fig, 'state', s);
+
+            % show frame in display axes
+            refreshDisplay(s, {}, {});
+
+            lblSkelTick.Text    = '';
+            lblBranchTick.Text  = '';
+            cla(heatAx);  cla(traceAx);  hold(traceAx, 'on');
+
+            msg = sprintf('Loaded: %s   (%d frames, %d x %d px)', ...
+                tifName, size(rawVess,1), size(rawVess,2), size(rawVess,3));
+        end
+
+        btnExport.Enable    = 'off';
+        btnExportFig.Enable = 'off';
+
+        msgParts = {msg};
+        if ~isnan(pxsz_auto)
+            msgParts{end+1} = sprintf('Pixel size auto-filled: %.4g um (%s).', pxsz_auto, pxSrc);
+        else
+            msgParts{end+1} = 'Pixel size not found in TIF/ini/xml - enter manually.';
+        end
+        if ~isnan(fps_auto)
+            msgParts{end+1} = sprintf('Frame rate auto-filled: %.4g Hz (%s).', fps_auto, fpsSrc);
+        else
             msgParts{end+1} = 'Frame rate not found in TIF/ini/xml - enter manually.';
+        end
+        if strcmp(ddAnalysis.Value, 'zstack')
+            if ~isnan(zstep_auto)
+                msgParts{end+1} = sprintf('Z-step auto-filled: %.4g um (TIF metadata).', zstep_auto);
+            else
+                msgParts{end+1} = 'Z-step not found in TIF metadata - enter manually.';
+            end
         end
 
         postUpdate(strjoin(msgParts, '  '));
+    end
+
+    % =========================================================================
+    %  ZSTACK MODE  (Written by Kira Shaw with Claude Code, Aug 2026)
+    % =========================================================================
+    function cb_analysisChanged()
+        isZ = strcmp(ddAnalysis.Value, 'zstack');
+        s   = getappdata(fig, 'state');
+
+        for h = xyDiamLeftH,  h.Visible = ~isZ; end
+        for h = zstackLeftH,  h.Visible = isZ;  end
+        for h = xyDiamRightH, h.Visible = ~isZ; end
+        for h = zstackRightH, h.Visible = isZ;  end
+        % results grid stays blank until an analysis has actually run, even
+        % in zstack mode - not just "isZ"
+        for h = zstackResultsH, h.Visible = (isZ && s.zAnalysisRun); end
+
+        btnGo.Visible       = ~isZ;
+        btnZAnalyze.Visible = isZ;
+
+        lblNBranch.Visible = ~isZ;
+        efNBranch.Visible  = ~isZ;
+        lblZstep.Visible   = isZ;
+        efZstep.Visible    = isZ;
+
+        zSlider.Visible   = isZ;
+        lblZFrame.Visible = isZ;
+
+        if isZ
+            % 315 -> 287px tall (top 681 -> 653) - Written by Kira Shaw
+            % with Claude Code, Aug 2026 - to fit the Slant-correct row
+            % (now 2 checkboxes, was 1) above it
+            dispAx.Position       = P(LX,366,LW,287);
+            lblDisplayHeader.Text = 'Z-stack display';
+        else
+            dispAx.Position       = P(LX,320,LW,361);
+            lblDisplayHeader.Text = 'Vessel display  (frame ~50)';
+        end
+
+        if isZ && ~isempty(s.zRaw)
+            renderZFrame(s);
+        elseif ~isZ && ~isempty(s.rawVess)
+            refreshDisplay(s, s.skeletons, s.masks);
+        end
+    end
+
+    % =========================================================================
+    function cb_zSliderChanging(value, fastMode)
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % fastMode (true while actively dragging, via ValueChangingFcn)
+        % skips renderZFrame's mask cleanup/skeleton preview, which is what
+        % made scrubbing feel slow - a full-quality render always follows
+        % once the slider settles, via ValueChangedFcn below.
+        if nargin < 2, fastMode = false; end
+        s = getappdata(fig, 'state');
+        if isempty(s.zRaw), return; end
+
+        frameIdx = round(value);
+        frameIdx = max(1, min(s.zNumFrames, frameIdx));
+        s.zCurrentFrame = frameIdx;
+        setappdata(fig, 'state', s);
+
+        lblZFrame.Text = sprintf('%d / %d', frameIdx, s.zNumFrames);
+        renderZFrame(s, fastMode);
+
+        % reflect the active segment's auto/manual state + value in the
+        % controls as the slider crosses into a different segment's range
+        idx = getActiveSegmentIdx(s.zSegments, frameIdx);
+        if ~isempty(idx)
+            seg = s.zSegments(idx);
+            isManual = strcmp(seg.mode, 'manual');
+            chkManualThresh.Value = isManual;
+            if isManual
+                lo = min(s.zRaw(:));  hi = max(max(s.zRaw(:)), lo+1);
+                sldManualThresh.Limits = [lo, hi];
+                sldManualThresh.Value  = seg.value;
+            end
+        end
+    end
+
+    % =========================================================================
+    function cb_autoThreshChanged()
+        s = getappdata(fig, 'state');
+        if isempty(s.zRaw)
+            uialert(fig, 'Load a z-stack first.', 'No data');
+            chkAutoThresh.Value = false;
+            return;
+        end
+
+        if chkAutoThresh.Value
+            % ---- turn on: whole-stack Otsu threshold as the single default -
+            method = currentMethodName();
+            postUpdate(sprintf('Computing whole-stack auto threshold (%s)...', method));
+            drawnow;
+            val = computeThreshold(s, s.zWorkVol, method);
+            s.zSegments = struct('startF', 1, 'endF', s.zNumFrames, ...
+                'mode', 'auto', 'value', val);
+            setappdata(fig, 'state', s);
+
+            ddThreshMethod.Enable  = 'on';
+            chkManualThresh.Enable = 'on';
+            btnRangeStart.Enable   = 'on';
+            btnRangeEnd.Enable     = 'on';
+            btnZAnalyze.Enable     = 'on';
+
+            renderZFrame(s);
+            refreshSegmentsTable(s);
+            postUpdate(sprintf('Auto threshold (%s) applied to whole stack: %.4g.', method, val));
+        else
+            % ---- turn off: full reset, back to raw display ------------------
+            s.zSegments    = struct('startF', {}, 'endF', {}, 'mode', {}, 'value', {});
+            s.zRangeStart  = [];
+            s.zAnalysisRun = false;
+            setappdata(fig, 'state', s);
+
+            chkManualThresh.Value  = false;
+            chkManualThresh.Enable = 'off';
+            sldManualThresh.Enable = 'off';
+            ddThreshMethod.Enable  = 'off';
+            btnRangeStart.Enable   = 'off';
+            btnRangeEnd.Enable     = 'off';
+            btnZAnalyze.Enable     = 'off';
+
+            resetDensityDisplay();
+            renderZFrame(s);
+            refreshSegmentsTable(s);
+            postUpdate('Threshold cleared - showing raw data.');
+        end
+    end
+
+    % =========================================================================
+    function cb_slantOptionChanged()
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % Both Slant-correct options change the reported density/distance
+        % numbers whenever they're on, so a stack processed with one on and
+        % another processed with it off aren't directly comparable (see the
+        % README) - post that warning every time either is toggled, in
+        % either direction, since changing which stacks use which setting
+        % is exactly the situation to watch for.
+        postUpdate(['Data may not be comparable between stacks if diff ' ...
+            'slant corrections applied (or not).']);
+    end
+
+    % =========================================================================
+    function cb_manualThreshChanged()
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % Bug found via a real report: ticking this while a range was
+        % pending (Start range clicked, End range not yet) mutated the
+        % ACTIVE segment immediately - which, before the range has been
+        % carved out, can still be the WHOLE-STACK segment, not just the
+        % frames about to be selected. Once "End range & apply" then split
+        % it, the leftover remainder inherited that mutation (see
+        % insertSegment) - so e.g. setting a harsher manual value for
+        % frames 1-6 could silently make frames 7-end manual too. Now:
+        % while a range is pending, this never touches any stored segment
+        % - it only reveals/enables the slider (renderZFrame previews its
+        % live value on the current frame instead). The segment mutation
+        % path below only runs for the "just toggle the current segment,
+        % no range being defined" use of this checkbox.
+        s = getappdata(fig, 'state');
+        if isempty(s.zSegments)
+            chkManualThresh.Value = false;
+            return;
+        end
+        rangePending = ~isempty(s.zRangeStart);
+
+        idx = getActiveSegmentIdx(s.zSegments, s.zCurrentFrame);
+        if chkManualThresh.Value
+            lo = min(s.zRaw(:));  hi = max(max(s.zRaw(:)), lo+1);
+            sldManualThresh.Limits = [lo, hi];
+            if ~isempty(idx)
+                sldManualThresh.Value = s.zSegments(idx).value;
+            end
+            sldManualThresh.Enable = 'on';
+            if ~rangePending
+                s.zSegments(idx).mode = 'manual';
+            end
+        else
+            if rangePending
+                sldManualThresh.Enable = 'off';
+            else
+                % turn off: recompute this segment's value as auto again
+                seg    = s.zSegments(idx);
+                region = s.zWorkVol(seg.startF:seg.endF, :, :);
+                s.zSegments(idx).mode  = 'auto';
+                s.zSegments(idx).value = computeThreshold(s, region, currentMethodName());
+                sldManualThresh.Enable = 'off';
+            end
+        end
+        setappdata(fig, 'state', s);
+        renderZFrame(s);
+        refreshSegmentsTable(s);
+    end
+
+    % =========================================================================
+    function cb_manualSliderChanging(value, fastMode)
+        % While a range is pending, don't touch the stored segment (see
+        % cb_manualThreshChanged) - just redraw, so renderZFrame's own
+        % pending-range preview logic shows the live slider value on the
+        % current frame (Written by Kira Shaw with Claude Code, Aug 2026).
+        % fastMode (true while actively dragging, via ValueChangingFcn)
+        % skips renderZFrame's mask cleanup/skeleton preview - running that
+        % on every tick while dragging was what made this slider feel slow
+        % and hard to use for picking a value. ValueChangedFcn (fastMode
+        % false) always follows once the slider settles, for a full-
+        % quality render, and is the only one that updates the segments
+        % table (no point doing that on every intermediate tick either).
+        if nargin < 2, fastMode = false; end
+        s = getappdata(fig, 'state');
+        if isempty(s.zSegments), return; end
+        if ~isempty(s.zRangeStart)
+            renderZFrame(s, fastMode);
+            return;
+        end
+        idx = getActiveSegmentIdx(s.zSegments, s.zCurrentFrame);
+        if isempty(idx), return; end
+        s.zSegments(idx).value = value;
+        s.zSegments(idx).mode  = 'manual';
+        setappdata(fig, 'state', s);
+        renderZFrame(s, fastMode);
+        if ~fastMode
+            refreshSegmentsTable(s);
+        end
+    end
+
+    % =========================================================================
+    function cb_methodChanged()
+        % Re-run every 'auto' segment (not manually-overridden ones) with
+        % the newly selected method.
+        s = getappdata(fig, 'state');
+        if isempty(s.zSegments), return; end
+        method = currentMethodName();
+        for i = 1:numel(s.zSegments)
+            if strcmp(s.zSegments(i).mode, 'auto')
+                region = s.zWorkVol(s.zSegments(i).startF:s.zSegments(i).endF, :, :);
+                s.zSegments(i).value = computeThreshold(s, region, method);
+            end
+        end
+        setappdata(fig, 'state', s);
+        renderZFrame(s);
+        refreshSegmentsTable(s);
+        postUpdate(sprintf('Recomputed auto segment(s) using %s.', method));
+    end
+
+    % =========================================================================
+    function cb_smoothChanged()
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % Toggling "Smooth" or editing sigma rebuilds zWorkVol (the volume
+        % threshold/skeleton logic reads from) and re-runs every 'auto'
+        % segment against it, same as switching threshold method. Manual
+        % segments keep whatever value was set by hand.
+        s = getappdata(fig, 'state');
+        if isempty(s.zRaw), return; end
+
+        s.zSmooth      = chkSmooth.Value;
+        s.zSmoothSigma = efSmoothSigma.Value;
+        s = refreshZWorkVol(s);
+
+        if ~isempty(s.zSegments)
+            method = currentMethodName();
+            for i = 1:numel(s.zSegments)
+                if strcmp(s.zSegments(i).mode, 'auto')
+                    region = s.zWorkVol(s.zSegments(i).startF:s.zSegments(i).endF, :, :);
+                    s.zSegments(i).value = computeThreshold(s, region, method);
+                end
+            end
+        end
+        setappdata(fig, 'state', s);
+
+        renderZFrame(s);
+        refreshSegmentsTable(s);
+        if s.zSmooth
+            postUpdate(sprintf('Smoothing on (sigma %.3g px) - auto threshold(s) recomputed.', s.zSmoothSigma));
+        else
+            postUpdate('Smoothing off - auto threshold(s) recomputed on raw data.');
+        end
+    end
+
+    % =========================================================================
+    function cb_skelPreviewChanged()
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % Just flips the flag and redraws - the actual 2D skeleton overlay
+        % is computed in renderZFrame, so it always matches whatever's
+        % currently shown (raw/thresholded, whichever frame, current
+        % smoothing) without duplicating that logic here.
+        s = getappdata(fig, 'state');
+        if isempty(s.zRaw), return; end
+        s.zSkelPreview = chkSkelPreview.Value;
+        setappdata(fig, 'state', s);
+        renderZFrame(s);
+    end
+
+    % =========================================================================
+    function cb_prunePreviewChanged()
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % Saves the edited value into state (zPruneLen was being read
+        % straight off efPruneLen.Value everywhere it's used, so this
+        % wasn't causing a bug, but it left state stale/unused - keeping
+        % it in sync mirrors zSmooth/zSmoothSigma). Then redraws so
+        % editing Prune length is reflected immediately if the skeleton
+        % preview is on (a no-op visually otherwise).
+        s = getappdata(fig, 'state');
+        if isempty(s.zRaw), return; end
+        s.zPruneLen = efPruneLen.Value;
+        setappdata(fig, 'state', s);
+        renderZFrame(s);
+    end
+
+    % =========================================================================
+    function cb_rangeStart()
+        s = getappdata(fig, 'state');
+        if isempty(s.zSegments)
+            uialert(fig, 'Turn on Auto threshold first.', 'No threshold yet');
+            return;
+        end
+        s.zRangeStart = s.zCurrentFrame;
+        setappdata(fig, 'state', s);
+        postUpdate(sprintf(['Range start set at frame %d - step to the last ' ...
+            'affected frame, set Auto/Manual as wanted, then click ' ...
+            '"End range & apply".'], s.zCurrentFrame));
+    end
+
+    % =========================================================================
+    function cb_rangeEnd()
+        s = getappdata(fig, 'state');
+        if isempty(s.zRangeStart)
+            uialert(fig, 'Click "Start range" first.', 'No range started');
+            return;
+        end
+
+        a = min(s.zRangeStart, s.zCurrentFrame);
+        b = max(s.zRangeStart, s.zCurrentFrame);
+
+        if chkManualThresh.Value
+            val  = sldManualThresh.Value;
+            mode = 'manual';
+        else
+            region = s.zWorkVol(a:b, :, :);
+            val    = computeThreshold(s, region, currentMethodName());
+            mode   = 'auto';
+        end
+
+        newSeg        = struct('startF', a, 'endF', b, 'mode', mode, 'value', val);
+        s.zSegments   = insertSegment(s.zSegments, newSeg);
+        s.zRangeStart = [];
+        setappdata(fig, 'state', s);
+
+        renderZFrame(s);
+        refreshSegmentsTable(s);
+        postUpdate(sprintf('Applied %s threshold (%.4g) to frames %d-%d.', mode, val, a, b));
+    end
+
+    % =========================================================================
+    function cb_zAnalyze()
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % MATLAB-native stand-in for the beanshell pipeline's Fiji step
+        % (Skeletonize (2D/3D) + 3D Distance Map + AnalyzeSkeleton_):
+        % bwskel/bwdist for the skeleton + distance transform, then a
+        % simplified branch extraction (see extractBranches) since there's
+        % no MATLAB equivalent of AnalyzeSkeleton_'s graph to call directly.
+        s = getappdata(fig, 'state');
+        if isempty(s.zRaw)
+            uialert(fig, 'Load a z-stack first.', 'No data');  return;
+        end
+        if isempty(s.zSegments)
+            uialert(fig, 'Turn on Auto threshold first.', 'No threshold');  return;
+        end
+
+        pxsz_um  = str2double(efPxsz.Value);
+        zstep_um = str2double(efZstep.Value);
+        if isnan(pxsz_um) || pxsz_um <= 0 || isnan(zstep_um) || zstep_um <= 0
+            % Written by Kira Shaw with Claude Code, Aug 2026.
+            % Vascular density is only meaningful in physical units, so it
+            % can't proceed without both values. Pop up a small dialog to
+            % enter them right here (pre-filled with whatever's already in
+            % the Parameters panel) rather than just refusing and pointing
+            % back at the fields - Cancel, or leaving either blank/invalid,
+            % stops the analysis.
+            answer = inputdlg( ...
+                {'Pixel size (microns):', 'Z-step (microns):'}, ...
+                'Missing calibration - enter to continue', [1 45], ...
+                {efPxsz.Value, efZstep.Value});
+            if isempty(answer)
+                postUpdate('Process Stack cancelled - pixel size/z-step missing.');
+                return;
+            end
+            pxsz_um  = str2double(answer{1});
+            zstep_um = str2double(answer{2});
+            if isnan(pxsz_um) || pxsz_um <= 0 || isnan(zstep_um) || zstep_um <= 0
+                uialert(fig, ['Pixel size and z-step must both be positive ' ...
+                    'numbers (in microns).'], 'Invalid calibration');
+                return;
+            end
+            efPxsz.Value  = num2str(pxsz_um, '%.4g');
+            efZstep.Value = num2str(zstep_um, '%.4g');
+        end
+
+        postUpdate('Building binarised volume...');  drawnow;
+        BW = buildBinaryVolume(s);
+        [nZ, nY, nX] = size(BW);
+        origNZ = nZ;
+        % Written by Kira Shaw with Claude Code, Aug 2026. Kept as-is
+        % (straight thresholded, pre-resample/pre-smoothing) for the
+        % boundary-restricted volume below - that measure works frame by
+        % frame on the original acquisition, not the resampled/smoothed
+        % grid BW itself is about to become.
+        BW_origFrames = BW;
+
+        % ---- resample z to isotropic voxels (matching the xy pixel size) so
+        % the distance map / branch lengths aren't distorted by anisotropy -
+        % skip it (with a note) if that would blow the array up too much.
+        resampleFactor    = zstep_um / pxsz_um;
+        newNZ             = max(1, round(nZ * resampleFactor));
+        isotropicApplied  = false;
+        if newNZ ~= nZ && (newNZ * nY * nX) <= 4 * numel(BW) && newNZ <= 2000
+            postUpdate(sprintf('Resampling z (%d -> %d slices) for isotropic voxels...', nZ, newNZ));
+            drawnow;
+            BW = logical(imresize3(BW, [newNZ, nY, nX], 'nearest'));
+            isotropicApplied = true;
+        else
+            postUpdate('Skipping z-resampling (stack too large) - using raw anisotropic voxel grid.');
+        end
+
+        if isotropicApplied
+            voxSize = [pxsz_um, pxsz_um, pxsz_um];   % [z y x], microns
+        else
+            voxSize = [zstep_um, pxsz_um, pxsz_um];
+        end
+
+        % ---- boundary-restricted volume, a second density measure - now
+        % opt-in (Written by Kira Shaw with Claude Code, Aug 2026; was
+        % always-on) via the "Vessel boundary" tick under Slant-correct.
+        % See computeBoundaryRestrictedVolume. Off: no computation done at
+        % all (skips the per-frame convex-hull/boundary work entirely),
+        % and every boundaryRestricted output is NaN/empty, same
+        % convention as slant correction when it's off.
+        boundaryRestrictApplied = chkBoundaryRestrict.Value;
+        if boundaryRestrictApplied
+            postUpdate('Computing boundary-restricted volume (2nd density measure)...');
+            drawnow;
+            [volume_boundaryRestricted_mm3, boundaryMaskOrig, boundaryCoords] = ...
+                computeBoundaryRestrictedVolume(BW_origFrames, pxsz_um, zstep_um);
+            if isotropicApplied
+                boundaryMask = logical(imresize3(boundaryMaskOrig, [newNZ, nY, nX], 'nearest'));
+            else
+                boundaryMask = boundaryMaskOrig;
+            end
+        else
+            volume_boundaryRestricted_mm3 = NaN;
+            boundaryMask   = false(size(BW));
+            boundaryCoords = cell(origNZ, 1);
+        end
+
+        % ---- smooth the binary mask in 3D (Written by Kira Shaw with
+        % Claude Code, Aug 2026) - morphological close then open with a
+        % spherical structuring element rounds out small surface bumps
+        % that otherwise nudge bwskel's medial-axis path off-centre. Most
+        % visible on large vessels: a "fat" tube doesn't have one
+        % well-defined centreline the way a thin one does, so any
+        % boundary noise (and there's proportionally more of it, the
+        % bigger the vessel) tips the medial axis from one near-
+        % equidistant voxel to another as you move along it, producing a
+        % swirl instead of a straight line down the middle.
+        % Radius is in physical microns (converted to voxels using the
+        % current voxel size) rather than a fixed voxel count, so it
+        % scales with calibration; strel('sphere',...) assumes isotropic
+        % spacing, so when the grid is still anisotropic (resampling
+        % skipped above) the smallest voxel dimension is used to stay
+        % conservative rather than over-smoothing in the coarser direction.
+        smoothMaskRadius_um = 2;
+        smoothRadiusVox = max(1, round(smoothMaskRadius_um / min(voxSize)));
+        postUpdate(sprintf('Smoothing binarised volume (morphological, radius %d vox)...', ...
+            smoothRadiusVox));
+        drawnow;
+        se = strel('sphere', smoothRadiusVox);
+        BW = imclose(BW, se);
+        BW = imopen(BW, se);
+
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % MinBranchLength (voxels, in the volume bwskel is run on - i.e.
+        % post-resample if isotropic resampling applied above) prunes short
+        % spurious spurs off the skeleton. 0/NaN/negative = no pruning.
+        pruneVox = efPruneLen.Value;
+        if isnan(pruneVox) || pruneVox < 0
+            pruneVox = 0;
+        end
+
+        postUpdate(sprintf(['Skeletonising (bwskel, prune %.3g vox) - this can ' ...
+            'take a while on a large stack...'], pruneVox));
+        drawnow;
+        skel = bwskel(BW, 'MinBranchLength', pruneVox);
+
+        postUpdate('Computing 3D distance map (bwdist)...');
+        drawnow;
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % Two different distance transforms, for two different purposes -
+        % bwdist(BW) is 0 everywhere INSIDE BW (a true voxel's nearest true
+        % voxel is itself), so it's only meaningful in the background: how
+        % far is this bit of tissue from the nearest vessel. bwdist(~BW) is
+        % the opposite - 0 in the background, and inside BW it's the
+        % distance to the nearest background voxel, i.e. the local vessel
+        % radius, which is what's needed at skeleton (centreline) points
+        % for diameter. Using bwdist(BW) for both (as this used to) made
+        % every branch's diam_um exactly 0, since skeleton voxels are
+        % always inside BW.
+        distMap   = bwdist(BW)  * pxsz_um;   % tissue -> nearest vessel (background)
+        radiusMap = bwdist(~BW) * pxsz_um;   % vessel interior -> nearest edge (radius)
+        % both valid for either voxSize case, since bwdist itself assumes
+        % isotropic voxels - which is exactly what the resampling above was for
+
+        postUpdate('Extracting vessel branches...');
+        drawnow;
+        branches = extractBranches(skel, radiusMap, voxSize);
+
+        % volume analysed: from the ORIGINAL (pre-resample) dimensions and
+        % calibration, so resampling can't distort the reported tissue
+        % volume. Optionally corrected for tissue slant (Written by Kira
+        % Shaw with Claude Code, Aug 2026) - a stack imaged at a slight
+        % angle to the tissue surface has some genuinely empty/black space
+        % within this rectangular box at any given depth, which a plain
+        % box overstates as tissue (see computeSlantCorrectedVolume).
+        slantCorrected = chkSlantCorrect.Value;
+        if slantCorrected
+            postUpdate('Correcting tissue volume for slant (10 um z-bins)...');
+            drawnow;
+            [volume_mm3, tissueMaskOrig] = computeSlantCorrectedVolume(s.zRaw, pxsz_um, zstep_um);
+            % Written by Kira Shaw with Claude Code, Aug 2026. tissueMaskOrig
+            % is in zRaw's ORIGINAL grid (pre-resample); resample it exactly
+            % as BW was, so the two line up voxel-for-voxel below. Reuses
+            % isotropicApplied/newNZ from the resampling step above rather
+            % than recomputing them.
+            if isotropicApplied
+                tissueMask = logical(imresize3(tissueMaskOrig, [newNZ, nY, nX], 'nearest'));
+            else
+                tissueMask = tissueMaskOrig;
+            end
+        else
+            volume_mm3 = (nY*pxsz_um) * (nX*pxsz_um) * (origNZ*zstep_um) / 1000^3;
+        end
+
+        if isempty(branches)
+            totalLength_m = 0;
+        else
+            totalLength_m = sum([branches.length_um]) / 1e6;
+        end
+        density_mPerMm3 = totalLength_m / volume_mm3;
+        % boundary-restricted density - same vessel length, second volume
+        % (Written by Kira Shaw with Claude Code, Aug 2026)
+        density_boundaryRestricted_mPerMm3 = totalLength_m / volume_boundaryRestricted_mm3;
+
+        % Written by Kira Shaw with Claude Code, Aug 2026. Mean tortuosity
+        % across branches (see extractBranches) - reported the same way as
+        % density, one headline number for the whole stack.
+        if isempty(branches)
+            tortuosity_mean = NaN;
+        else
+            tortuosity_mean = mean([branches.tortuosity], 'omitnan');
+        end
+
+        % sample tissue-to-vessel distances for the histogram (background
+        % voxels only - vessel interior reads 0 and isn't meaningful here);
+        % subsample if huge, purely so the histogram computes quickly.
+        % Restricted to the same tissue mask used for the volume when slant
+        % correction is on (Written by Kira Shaw with Claude Code, Aug
+        % 2026) - otherwise density used a corrected (smaller) tissue
+        % volume while this still sampled "distance to nearest vessel" from
+        % every background voxel in the full box, including the black/
+        % non-tissue ones the correction had just excluded - inconsistent,
+        % and would inflate/skew these percentiles in exactly the stacks
+        % where the correction matters most.
+        if slantCorrected
+            tissueDist = distMap(~BW & tissueMask);
+        else
+            tissueDist = distMap(~BW);
+        end
+        if numel(tissueDist) > 2e6
+            tissueDist = tissueDist(randperm(numel(tissueDist), 2e6));
+        end
+
+        % Written by Kira Shaw with Claude Code, Aug 2026. Same idea,
+        % restricted to the boundary-restricted mask instead - a second,
+        % independent distance-to-vessel sample using the OTHER volume
+        % definition, for consistency with density_boundaryRestricted.
+        tissueDist_boundaryRestricted = distMap(~BW & boundaryMask);
+        if numel(tissueDist_boundaryRestricted) > 2e6
+            tissueDist_boundaryRestricted = tissueDist_boundaryRestricted( ...
+                randperm(numel(tissueDist_boundaryRestricted), 2e6));
+        end
+
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % A single mm^3/um^3 number is hard to sanity-check at a glance;
+        % showing the actual H x W x Z extent in microns is what you'd
+        % actually compare against the acquisition, so display that instead
+        % (mm^3 is still computed above and used for the density figure,
+        % and is still what gets exported in the data files). Stashed in
+        % state so cb_zExportFig's sgtitle can match the live display.
+        height_um = round(nY*pxsz_um);
+        width_um  = round(nX*pxsz_um);
+        depth_um  = round(origNZ*zstep_um);
+
+        % Written by Kira Shaw with Claude Code, Aug 2026. 50th/95th
+        % percentile tissue-to-vessel distance (cf. Nature Comms 2021
+        % 10.1038/s41467-021-23508-y, fig 7) - a couple of headline numbers
+        % alongside the full histogram already shown below.
+        distP50_um = pctileLocal(tissueDist, 50);
+        distP95_um = pctileLocal(tissueDist, 95);
+        % boundary-restricted equivalents (Written by Kira Shaw with Claude
+        % Code, Aug 2026) - second, independent measure; not shown in the
+        % main results text/plots by default, but kept for export/writing
+        % up (see the RHS of the results box, though, for the headline
+        % numbers - just visually distinguished from the primary ones)
+        distP50_boundaryRestricted_um = pctileLocal(tissueDist_boundaryRestricted, 50);
+        distP95_boundaryRestricted_um = pctileLocal(tissueDist_boundaryRestricted, 95);
+
+        s.zBranches        = branches;
+        s.zVolume_mm3       = volume_mm3;
+        s.zVolumeHWZ_um     = [height_um, width_um, depth_um];
+        s.zDensity_mPerMm3  = density_mPerMm3;
+        s.zTortuosity_mean  = tortuosity_mean;
+        s.zSlantCorrected   = slantCorrected;
+        s.zDistVals_um      = tissueDist;
+        s.zDistP50_um       = distP50_um;
+        s.zDistP95_um       = distP95_um;
+        s.zVolume_boundaryRestricted_mm3   = volume_boundaryRestricted_mm3;
+        s.zDensity_boundaryRestricted_mPerMm3 = density_boundaryRestricted_mPerMm3;
+        s.zDistVals_boundaryRestricted_um  = tissueDist_boundaryRestricted;
+        s.zDistP50_boundaryRestricted_um   = distP50_boundaryRestricted_um;
+        s.zDistP95_boundaryRestricted_um   = distP95_boundaryRestricted_um;
+        s.zBoundaryRestrictApplied = boundaryRestrictApplied;  % whether this run computed it
+        s.zBoundaryCoords   = boundaryCoords;  % per-frame outline, original grid - for export/overlay
+        s.zBoundaryMaskVol  = boundaryMask;  % cached for the export figure's boundary overlay
+        s.zSkelVol          = skel;      % cached for the "stacked slices" export view
+        s.zDistMapVol       = distMap;
+        s.zAnalysisRun      = true;
+        setappdata(fig, 'state', s);
+
+        % ---- display ---------------------------------------------------------
+        % Written by Kira Shaw with Claude Code, Aug 2026. Both sides of
+        % the results box now follow the exact same 4-line, always-labelled
+        % structure, so LHS and RHS read as one standardised box rather
+        % than two differently-formatted ones: (1) a title naming which
+        % volume definition this side is, (2) density + tortuosity (shown
+        % on both sides - tortuosity itself doesn't depend on which volume
+        % definition is used, it's the same skeleton either way), (3) the
+        % total volume that density was computed over, (4) tissue-to-
+        % vessel distance percentiles. Slant-correction is flagged on the
+        % density line since it's the one number that tag actually
+        % qualifies.
+        if slantCorrected
+            densityLine = sprintf('Density: %.3g m/mm^3 (slant-corrected)   |   Tortuosity: %.3g', ...
+                density_mPerMm3, tortuosity_mean);
+        else
+            densityLine = sprintf('Density: %.3g m/mm^3   |   Tortuosity: %.3g', ...
+                density_mPerMm3, tortuosity_mean);
+        end
+        lblDensity.Text = { ...
+            'Full tissue:', ...
+            densityLine, ...
+            sprintf('Total volume: %.4g mm^3', volume_mm3), ...
+            sprintf('Distance to nearest vessel: 50th pct %.3g um   |   95th pct %.3g um', ...
+                distP50_um, distP95_um)};
+
+        % Boundary-restricted, RHS of the same box (Written by Kira Shaw
+        % with Claude Code, Aug 2026) - opt-in (the "Vessel boundary" tick
+        % under Slant-correct:); when it wasn't ticked for this run, say so
+        % plainly rather than showing NaN-filled numbers, but keep the same
+        % title line either way.
+        if boundaryRestrictApplied
+            lblDensityBoundary.Text = { ...
+                'Boundary restricted:', ...
+                sprintf('Density: %.3g m/mm^3   |   Tortuosity: %.3g', ...
+                    density_boundaryRestricted_mPerMm3, tortuosity_mean), ...
+                sprintf('Total volume: %.4g mm^3', volume_boundaryRestricted_mm3), ...
+                sprintf('Distance to nearest vessel: 50th pct %.3g um   |   95th pct %.3g um', ...
+                    distP50_boundaryRestricted_um, distP95_boundaryRestricted_um)};
+        else
+            lblDensityBoundary.Text = { ...
+                'Boundary restricted:', ...
+                'Not computed ("Vessel boundary" not ticked', ...
+                'for this run)', ''};
+        end
+
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % Max-projection across the whole stack, not a single slice - a
+        % vessel network is rarely evenly spread through every z-slice, so
+        % "frame 1" specifically could easily land somewhere sparse/empty
+        % and look like the skeleton failed even when it didn't. Projecting
+        % is a more reliable sanity check regardless of where the actual
+        % vasculature sits.
+        skelProj = squeeze(any(skel, 1));
+        distProj = squeeze(max(distMap, [], 1));
+
+        cla(axSkel);
+        imagesc(axSkel, skelProj);
+        colormap(axSkel, [1 1 1; 0 0 0]);
+        axis(axSkel, 'image');  axSkel.XTick = [];  axSkel.YTick = [];
+        title(axSkel, 'Skeleton  (max projection)');
+
+        cla(axDist);
+        imagesc(axDist, distProj);
+        colormap(axDist, 'parula');
+        axis(axDist, 'image');  axDist.XTick = [];  axDist.YTick = [];
+        cbD = colorbar(axDist);  ylabel(cbD, 'um');
+        cbD.Direction = 'reverse';  % 0 (near a vessel) at the top, not the bottom
+        title(axDist, 'Distance to nearest vessel  (max projection, um)');
+
+        % ---- diameter, length & tortuosity by depth, as scatter plots,
+        % each titled with n (full mean/SD/range in the exported figure) --
+        cla(axDiamDepth);
+        cla(axLengthDepth);
+        cla(axTortDepth);
+        if ~isempty(branches)
+            diamVals   = [branches.diam_um];
+            lengthVals = [branches.length_um];
+            depthVals  = [branches.depth_um];
+            tortVals   = [branches.tortuosity];
+
+            % short n-only subtitle here (was mean/SD/range) - the full
+            % stats line is more useful in the exported figure, where
+            % there's room for it (Written by Kira Shaw with Claude Code,
+            % Aug 2026; see cb_zExportFig)
+            scatter(axDiamDepth, depthVals, diamVals, 10, [0.30 0.50 0.95], 'filled');
+            title(axDiamDepth, {'Diameter by depth', nLine(diamVals, 'nVess=')});
+
+            scatter(axLengthDepth, depthVals, lengthVals, 10, [0.90 0.20 0.20], 'filled');
+            title(axLengthDepth, {'Length by depth', nLine(lengthVals, 'nVess=')});
+
+            % Written by Kira Shaw with Claude Code, Aug 2026. Per-branch
+            % tortuosity (see extractBranches) - NaN for a degenerate
+            % zero-chord branch, so scatter just skips plotting those.
+            scatter(axTortDepth, depthVals, tortVals, 10, [0.55 0.30 0.75], 'filled');
+            title(axTortDepth, {'Tortuosity by depth', nLine(tortVals, 'nVess=')});
+        else
+            title(axDiamDepth, 'Diameter by depth');
+            title(axLengthDepth, 'Length by depth');
+            title(axTortDepth, 'Tortuosity by depth');
+        end
+        xlabel(axDiamDepth, 'Depth (um)');    ylabel(axDiamDepth, 'Diameter (um)');
+        xlabel(axLengthDepth, 'Depth (um)');  ylabel(axLengthDepth, 'Length (um)');
+        xlabel(axTortDepth, 'Depth (um)');    ylabel(axTortDepth, 'Tortuosity');
+
+        % ---- distance-to-nearest-vessel histogram, binned, as % of tissue --
+        cla(axDistHist);
+        nBins = 40;
+        [counts, edges] = histcounts(tissueDist, nBins);
+        pctVals   = 100 * counts / max(sum(counts), 1);
+        binCtrs   = edges(1:end-1) + diff(edges)/2;
+        bar(axDistHist, binCtrs, pctVals, 1, ...
+            'FaceColor', [0.20 0.45 0.75], 'EdgeColor', 'none');
+        xlabel(axDistHist, 'Distance (um)');  ylabel(axDistHist, '% of tissue');
+        title(axDistHist, {'Distance to nearest vessel', nLine(tissueDist, 'nVox=')});
+
+        % results grid was blank until now (see resetDensityDisplay) -
+        % reveal it now it's actually populated
+        for h = zstackResultsH, h.Visible = 'on'; end
+
+        btnExport.Enable    = 'on';
+        btnExportFig.Enable = 'on';
+        postUpdate(sprintf('Density calculated: %.3g m/mm^3 across %d branches.', ...
+            density_mPerMm3, numel(branches)));
+    end
+
+    % =========================================================================
+    function cb_zExport()
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        s = getappdata(fig, 'state');
+        if ~s.zAnalysisRun
+            uialert(fig, 'Run "Process Stack" first.', 'No results');
+            return;
+        end
+
+        choice = uiconfirm(fig, 'Choose export format:', 'Export', ...
+            'Options',       {'MAT file', 'Excel (.xlsx)', 'Cancel'}, ...
+            'DefaultOption', 1, 'CancelOption', 3);
+        if strcmp(choice, 'Cancel'), return; end
+
+        pxsz_um  = str2double(efPxsz.Value);
+        fps      = str2double(efFPS.Value);
+        zstep_um = str2double(efZstep.Value);
+
+        nVessels = numel(s.zBranches);
+        if nVessels > 0
+            length_um  = [s.zBranches.length_um]';
+            diam_um    = [s.zBranches.diam_um]';
+            depth_um   = [s.zBranches.depth_um]';
+            tortuosity = [s.zBranches.tortuosity]';
+        else
+            length_um = zeros(0,1);  diam_um = zeros(0,1);  depth_um = zeros(0,1);
+            tortuosity = zeros(0,1);
+        end
+        dist_um = s.zDistVals_um(:);
+        dist_boundaryRestricted_um = s.zDistVals_boundaryRestricted_um(:);
+
+        % ---- tissue-to-vessel distance percentiles, 5th-95th in 2.5% steps
+        % (Written by Kira Shaw with Claude Code, Aug 2026; cf. Nature
+        % Comms 2021 10.1038/s41467-021-23508-y, fig 7)
+        pct_pct    = (5:2.5:95)';
+        pct_um     = pctileLocal(dist_um, pct_pct);   % column, same shape as pct_pct
+        pct_boundaryRestricted_um = pctileLocal(dist_boundaryRestricted_um, pct_pct);
+
+        % ---- preprocessing/thresholding settings, for the paper's methods
+        % section (Written by Kira Shaw with Claude Code, Aug 2026) - read
+        % straight off the live controls, same values cb_zAnalyze itself used.
+        thresholdMethod   = currentMethodName();
+        smoothingOn       = chkSmooth.Value;
+        smoothingSigma_px = efSmoothSigma.Value;
+        pruneLength_vox   = efPruneLen.Value;
+
+        if strcmp(choice, 'MAT file')
+            % ---- everything in one .mat, grouped into structures ------------
+            [fn, fp] = uiputfile('*.mat', 'Save MAT file', ...
+                fullfile(s.expDir, 'MAPS_zstackresults.mat'));
+            if isequal(fn,0), return; end
+
+            results.summary.density_mPerMm3    = s.zDensity_mPerMm3;
+            results.summary.tortuosity_mean    = s.zTortuosity_mean;
+            results.summary.volumeSlantCorrected = s.zSlantCorrected;
+            results.summary.volume_mm3      = s.zVolume_mm3;
+            results.summary.volume_um3      = s.zVolume_mm3 * 1000^3;
+            results.summary.pxsz_um         = pxsz_um;
+            results.summary.fps             = fps;
+            results.summary.zStep_um        = zstep_um;
+            results.summary.distP50_um      = s.zDistP50_um;
+            results.summary.distP95_um      = s.zDistP95_um;
+
+            % boundaryRestricted: 2nd density measure, per-frame convex
+            % hull of the vessel mask rather than a bounding box or
+            % raw-intensity black test (Written by Kira Shaw with Claude
+            % Code, Aug 2026) - not shown in the plots, kept here for
+            % writing up/exploring alongside the primary numbers.
+            results.summary.boundaryRestrictApplied            = s.zBoundaryRestrictApplied;
+            results.summary.density_boundaryRestricted_mPerMm3 = s.zDensity_boundaryRestricted_mPerMm3;
+            results.summary.volume_boundaryRestricted_mm3      = s.zVolume_boundaryRestricted_mm3;
+            results.summary.distP50_boundaryRestricted_um      = s.zDistP50_boundaryRestricted_um;
+            results.summary.distP95_boundaryRestricted_um      = s.zDistP95_boundaryRestricted_um;
+
+            % per-frame boundary outline coordinates, original (unresampled)
+            % pixel grid - one [x y] array per frame, empty where that
+            % frame had no vessel signal to draw a hull around. Only
+            % meaningful when boundaryRestrictApplied is true (Written by
+            % Kira Shaw with Claude Code, Aug 2026).
+            results.boundaryRestricted.applied = s.zBoundaryRestrictApplied;
+            results.boundaryRestricted.coords  = s.zBoundaryCoords;
+
+            results.vessels.vesselID   = (1:nVessels)';
+            results.vessels.length_um  = length_um;
+            results.vessels.diam_um    = diam_um;
+            results.vessels.depth_um   = depth_um;
+            results.vessels.tortuosity = tortuosity;
+
+            results.distanceToVessel.dist_um       = dist_um;
+            results.distanceToVessel.percentile_pct = pct_pct;
+            results.distanceToVessel.percentile_um  = pct_um;
+            results.distanceToVessel.boundaryRestricted_dist_um       = dist_boundaryRestricted_um;
+            results.distanceToVessel.boundaryRestricted_percentile_um = pct_boundaryRestricted_um;
+
+            results.segments = s.zSegments;
+
+            % preprocessing/thresholding settings, for methods write-up
+            results.processing.thresholdMethod   = thresholdMethod;
+            results.processing.smoothingOn       = smoothingOn;
+            results.processing.smoothingSigma_px = smoothingSigma_px;
+            results.processing.pruneLength_vox   = pruneLength_vox;
+
+            save(fullfile(fp,fn), 'results', '-v7.3');
+            postUpdate(['Saved: ' fullfile(fp,fn)]);
+
+        else
+            % ---- Excel: one file per category, as requested -----------------
+            [fn, fp] = uiputfile('*.xlsx', 'Save Excel files (base name)', ...
+                fullfile(s.expDir, 'MAPS_zstackresults.xlsx'));
+            if isequal(fn,0), return; end
+            [~, baseName, ext] = fileparts(fn);
+
+            summaryFn = fullfile(fp, sprintf('%s_summary%s', baseName, ext));
+            Tsum = table(s.zDensity_mPerMm3, s.zTortuosity_mean, s.zSlantCorrected, ...
+                s.zVolume_mm3, s.zVolume_mm3*1000^3, pxsz_um, fps, zstep_um, ...
+                s.zDistP50_um, s.zDistP95_um, ...
+                s.zBoundaryRestrictApplied, ...
+                s.zDensity_boundaryRestricted_mPerMm3, s.zVolume_boundaryRestricted_mm3, ...
+                s.zDistP50_boundaryRestricted_um, s.zDistP95_boundaryRestricted_um, ...
+                'VariableNames', ...
+                {'Density_mPerMm3', 'Tortuosity_mean', 'VolumeSlantCorrected', ...
+                 'Volume_mm3', 'Volume_um3', ...
+                 'PixelSize_um', 'FrameRate_Hz', 'ZStep_um', ...
+                 'DistanceToVessel_P50_um', 'DistanceToVessel_P95_um', ...
+                 'BoundaryRestrictApplied', ...
+                 'Density_boundaryRestricted_mPerMm3', 'Volume_boundaryRestricted_mm3', ...
+                 'DistanceToVessel_boundaryRestricted_P50_um', ...
+                 'DistanceToVessel_boundaryRestricted_P95_um'});
+            if isfile(summaryFn), delete(summaryFn); end
+            writetable(Tsum, summaryFn);
+
+            vesselsFn = fullfile(fp, sprintf('%s_vessels%s', baseName, ext));
+            Tves = table((1:nVessels)', length_um, diam_um, depth_um, tortuosity, ...
+                'VariableNames', {'VesselID', 'Length_um', 'Diameter_um', 'Depth_um', ...
+                'Tortuosity'});
+            if isfile(vesselsFn), delete(vesselsFn); end
+            writetable(Tves, vesselsFn);
+
+            distFn = fullfile(fp, sprintf('%s_distanceToVessel%s', baseName, ext));
+            % Written by Kira Shaw with Claude Code, Aug 2026. dist_um can
+            % have up to 2,000,000 rows (see the subsample cap where
+            % zDistVals_um is built) - fine for the .mat export and for
+            % computing the histogram/percentiles, but an Excel sheet can
+            % only hold 1,048,576 rows including the header, so writing it
+            % straight through was erroring out ("exceeds the sheet
+            % boundaries"). Excel isn't really the place for a raw list
+            % this long anyway (that's what the .mat export and the
+            % _distancePercentiles file are for) - subsample further,
+            % safely under the sheet limit, purely for a spot-check/
+            % distribution overview in Excel.
+            excelDistCap = 500000;
+            dist_um_excel = dist_um;
+            if numel(dist_um_excel) > excelDistCap
+                dist_um_excel = dist_um_excel(randperm(numel(dist_um_excel), excelDistCap));
+            end
+            Tdist = table(dist_um_excel, 'VariableNames', {'Distance_um'});
+            if isfile(distFn), delete(distFn); end
+            writetable(Tdist, distFn);
+
+            % boundaryRestricted raw distances, same Excel row cap as above
+            % (Written by Kira Shaw with Claude Code, Aug 2026)
+            distBoundaryFn = fullfile(fp, sprintf('%s_distanceToVessel_boundaryRestricted%s', baseName, ext));
+            dist_boundaryRestricted_excel = dist_boundaryRestricted_um;
+            if numel(dist_boundaryRestricted_excel) > excelDistCap
+                dist_boundaryRestricted_excel = dist_boundaryRestricted_excel( ...
+                    randperm(numel(dist_boundaryRestricted_excel), excelDistCap));
+            end
+            TdistBoundary = table(dist_boundaryRestricted_excel, 'VariableNames', {'Distance_um'});
+            if isfile(distBoundaryFn), delete(distBoundaryFn); end
+            writetable(TdistBoundary, distBoundaryFn);
+
+            % ---- distance-to-vessel percentiles, 5th-95th in 2.5% steps,
+            % both volume definitions side by side (Written by Kira Shaw
+            % with Claude Code, Aug 2026; cf. Nature Comms 2021
+            % 10.1038/s41467-021-23508-y, fig 7)
+            distPctFn = fullfile(fp, sprintf('%s_distancePercentiles%s', baseName, ext));
+            Tpct = table(pct_pct, pct_um, pct_boundaryRestricted_um, 'VariableNames', ...
+                {'Percentile', 'Distance_um', 'Distance_boundaryRestricted_um'});
+            if isfile(distPctFn), delete(distPctFn); end
+            writetable(Tpct, distPctFn);
+
+            % ---- thresholding/preprocessing settings (Written by Kira Shaw
+            % with Claude Code, Aug 2026) - the per-frame-range segments
+            % table plus the smoothing/pruning settings, for the paper's
+            % methods section. General settings are repeated on every row
+            % so the whole thing stays one flat, self-contained sheet.
+            settingsFn = fullfile(fp, sprintf('%s_thresholdSettings%s', baseName, ext));
+            nSeg = numel(s.zSegments);
+            if nSeg > 0
+                segStart = [s.zSegments.startF]';
+                segEnd   = [s.zSegments.endF]';
+                segMode  = {s.zSegments.mode}';
+                segVal   = [s.zSegments.value]';
+            else
+                segStart = zeros(0,1);  segEnd  = zeros(0,1);
+                segMode  = cell(0,1);   segVal  = zeros(0,1);
+            end
+            Tset = table(segStart, segEnd, segMode, segVal, ...
+                repmat({thresholdMethod}, nSeg, 1), repmat(smoothingOn, nSeg, 1), ...
+                repmat(smoothingSigma_px, nSeg, 1), repmat(pruneLength_vox, nSeg, 1), ...
+                'VariableNames', {'SegmentStartFrame', 'SegmentEndFrame', ...
+                'SegmentMode', 'SegmentThresholdValue', 'ThresholdMethod', ...
+                'SmoothingOn', 'SmoothingSigma_px', 'PruneLength_vox'});
+            if isfile(settingsFn), delete(settingsFn); end
+            writetable(Tset, settingsFn);
+
+            % ---- boundary-restricted per-frame outline coordinates, only
+            % written when that measure was actually computed this run
+            % (Written by Kira Shaw with Claude Code, Aug 2026) - long
+            % format, one row per boundary point per frame, on the
+            % original (unresampled) pixel grid.
+            if s.zBoundaryRestrictApplied
+                boundaryCoordFn = fullfile(fp, sprintf('%s_boundaryCoordinates%s', baseName, ext));
+                frameCol = zeros(0,1); xCol = zeros(0,1); yCol = zeros(0,1);
+                for fIdx = 1:numel(s.zBoundaryCoords)
+                    xy = s.zBoundaryCoords{fIdx};
+                    if isempty(xy), continue; end
+                    frameCol = [frameCol; repmat(fIdx, size(xy,1), 1)]; %#ok<AGROW>
+                    xCol     = [xCol; xy(:,1)]; %#ok<AGROW>
+                    yCol     = [yCol; xy(:,2)]; %#ok<AGROW>
+                end
+                Tbound = table(frameCol, xCol, yCol, ...
+                    'VariableNames', {'Frame', 'X_px', 'Y_px'});
+                if isfile(boundaryCoordFn), delete(boundaryCoordFn); end
+                writetable(Tbound, boundaryCoordFn);
+
+                postUpdate(sprintf('Saved 7 files: %s, %s, %s, %s, %s, %s, %s', ...
+                    summaryFn, vesselsFn, distFn, distBoundaryFn, distPctFn, ...
+                    settingsFn, boundaryCoordFn));
+            else
+                postUpdate(sprintf('Saved 6 files: %s, %s, %s, %s, %s, %s', ...
+                    summaryFn, vesselsFn, distFn, distBoundaryFn, distPctFn, settingsFn));
+            end
+        end
+    end
+
+    % =========================================================================
+    function cb_zExportFig()
+        s = getappdata(fig, 'state');
+        if ~s.zAnalysisRun
+            uialert(fig, 'Run "Process Stack" first.', 'No results');
+            return;
+        end
+
+        % Written by Kira Shaw with Claude Code, Aug 2026. Two different
+        % tissue-volume definitions now exist (the usual bounding-box
+        % based one, and the boundary-restricted per-frame convex-hull
+        % one) - ask which this figure's headline numbers (and the
+        % skeleton/distance-map boundary overlay, if boundary-restricted)
+        % should reflect, rather than picking one silently. Boundary
+        % restriction is now opt-in (the "Vessel boundary" tick under
+        % Slant-correct:), so only offer it here if that measure was
+        % actually computed on the run these results came from - otherwise
+        % there's nothing to show and it would just be NaNs.
+        if s.zBoundaryRestrictApplied
+            volChoice = uiconfirm(fig, ...
+                'Which tissue volume definition should this figure use?', ...
+                'Export figure', ...
+                'Options',       {'Full tissue', 'Boundary-restricted', 'Cancel'}, ...
+                'DefaultOption', 1, 'CancelOption', 3);
+            if strcmp(volChoice, 'Cancel'), return; end
+            useBoundary = strcmp(volChoice, 'Boundary-restricted');
+        else
+            volChoice   = 'Full tissue';
+            useBoundary = false;
+        end
+
+        expFig = figure('Name', 'MAPS — Vascular Density Export', 'Color', 'w', ...
+            'Position', [60 40 1400 900]);
+
+        % ---- recompute full stats independently of the live GUI's axes -----
+        % Written by Kira Shaw with Claude Code, Aug 2026. The live titles
+        % now show n only (less crowded there); this figure gets the full
+        % mean/SD/range line, so it's built here from the underlying data
+        % rather than copied from the (now-shortened) live title strings.
+        if ~isempty(s.zBranches)
+            diamVals   = [s.zBranches.diam_um];
+            lengthVals = [s.zBranches.length_um];
+            depthVals  = [s.zBranches.depth_um];
+            tortVals   = [s.zBranches.tortuosity];
+        else
+            diamVals = []; lengthVals = []; depthVals = []; tortVals = [];
+        end
+        % Written by Kira Shaw with Claude Code, Aug 2026. Everything
+        % volume/distance-dependent below is pulled from whichever
+        % definition was chosen above.
+        if useBoundary
+            tissueDist   = s.zDistVals_boundaryRestricted_um;
+            densityVal   = s.zDensity_boundaryRestricted_mPerMm3;
+            volumeVal    = s.zVolume_boundaryRestricted_mm3;
+            distP50Val   = s.zDistP50_boundaryRestricted_um;
+            distP95Val   = s.zDistP95_boundaryRestricted_um;
+        else
+            tissueDist   = s.zDistVals_um;
+            densityVal   = s.zDensity_mPerMm3;
+            volumeVal    = s.zVolume_mm3;
+            distP50Val   = s.zDistP50_um;
+            distP95Val   = s.zDistP95_um;
+        end
+
+        % ---- manual 2-row grid: 3 columns on top, 4 on bottom (Written by
+        % Kira Shaw with Claude Code, Aug 2026 - rejigged from subplot(2,3)
+        % to fit tortuosity-by-depth in alongside the other 3 bottom
+        % plots). Plain normalized-figure-unit positions rather than
+        % subplot(), since subplot doesn't support a different column
+        % count per row.
+        figL = 0.045;  figR = 0.985;  figTop = 0.87;  figBot = 0.07;
+        rowGap = 0.10;
+        rowH   = (figTop - figBot - rowGap) / 2;
+        row1Y  = figBot + rowH + rowGap;
+        row2Y  = figBot;
+        colGap3 = 0.035;  col3W = (figR - figL - 2*colGap3) / 3;
+        colGap4 = 0.030;  col4W = (figR - figL - 3*colGap4) / 4;
+        pos1 = @(c) [figL + (c-1)*(col3W+colGap3), row1Y, col3W, rowH];
+        pos2 = @(c) [figL + (c-1)*(col4W+colGap4), row2Y, col4W, rowH];
+
+        % ---- top row: skeleton, distance map (~10 layered, angled example
+        % slices - rather than a single frame, as shown live), and
+        % thresholding/preprocessing settings (moved here from the bottom
+        % row - Written by Kira Shaw with Claude Code, Aug 2026) ------------
+        ax1 = axes('Parent', expFig, 'Position', pos1(1));
+        idx1 = plotStackedSlices(ax1, s.zSkelVol, [1 1 1; 0 0 0]);
+        title(ax1, 'Skeleton  (every slice)');
+        % Flatter/more from-above than the default angled view (Written by
+        % Kira Shaw with Claude Code, Aug 2026) - the shallowest slices are
+        % where pial vessels sit, and a more top-down angle on this plot
+        % shows that surface layer more clearly than the standard oblique
+        % angle does.
+        view(ax1, -37.5, 50);
+
+        ax2 = axes('Parent', expFig, 'Position', pos1(2));
+        idx2 = plotStackedSlices(ax2, s.zDistMapVol, parula(256));
+        title(ax2, 'Distance to nearest vessel  (10 example slices, um)');
+        cbD2 = colorbar(ax2);  ylabel(cbD2, 'Distance to vessel (um)');
+        cbD2.Direction = 'reverse';  % 0 (near a vessel) at the top, matching axSkel/ax1's depth axis
+
+        % ---- boundary-restricted outline overlay (Written by Kira Shaw
+        % with Claude Code, Aug 2026) - only drawn when that's the chosen
+        % definition, on both stacks, at the same slices each was already
+        % drawn at, so it visibly shows what "boundary-restricted" is
+        % actually restricting to.
+        if useBoundary && ~isempty(s.zBoundaryMaskVol)
+            overlayBoundary(ax1, s.zBoundaryMaskVol, idx1);
+            overlayBoundary(ax2, s.zBoundaryMaskVol, idx2);
+        end
+
+        % ---- shared z-depth reference (Written by Kira Shaw with Claude
+        % Code, Aug 2026) - a real depth (um) axis on the skeleton plot's
+        % Z axis. It sits right between the two 3D plots (ax1 is to ax2's
+        % left), so both can be read against this one reference rather
+        % than duplicating it on both - and it's what makes the different
+        % slice sampling obvious: the skeleton's ticks land far closer
+        % together for the same physical depth than the distance map's,
+        % since it's plotting every slice against every 10th.
+        nZskel   = size(s.zSkelVol, 1);
+        depth_um = s.zVolumeHWZ_um(3);
+        nTicksZ  = min(6, nZskel);
+        zTickIdx = round(linspace(1, nZskel, nTicksZ));
+        if nZskel > 1
+            zTickDepth = (zTickIdx - 1) / (nZskel - 1) * depth_um;
+        else
+            zTickDepth = 0;
+        end
+        ax1.ZTick      = zTickIdx;
+        ax1.ZTickLabel = arrayfun(@(v) sprintf('%.0f', v), zTickDepth, 'UniformOutput', false);
+        zlabel(ax1, 'Depth (um)');
+
+        % thresholding/preprocessing settings, as plain text - so the
+        % methods this figure came from are documented alongside it, in
+        % case they're needed when writing the paper up.
+        ax3 = axes('Parent', expFig, 'Position', pos1(3));
+        axis(ax3, 'off');
+        title(ax3, 'Thresholding settings');
+        segLines = cell(numel(s.zSegments), 1);
+        for i = 1:numel(s.zSegments)
+            seg = s.zSegments(i);
+            segLines{i} = sprintf('Frames %d-%d: %s = %.4g', ...
+                seg.startF, seg.endF, seg.mode, seg.value);
+        end
+        if chkSmooth.Value
+            smoothLine = sprintf('Smoothing: on (Gaussian sigma %.3g px)', efSmoothSigma.Value);
+        else
+            smoothLine = 'Smoothing: off';
+        end
+        settingsTxt = [{sprintf('Threshold method: %s', currentMethodName())}; ...
+            segLines; ...
+            {smoothLine}; ...
+            {sprintf('Skeleton pruning: MinBranchLength = %.4g vox', efPruneLen.Value)}; ...
+            {sprintf('Pixel size: %.4g um   Z-step: %.4g um', ...
+                str2double(efPxsz.Value), str2double(efZstep.Value))}];
+        text(ax3, 0, 1, settingsTxt, 'Units', 'normalized', ...
+            'VerticalAlignment', 'top', 'FontSize', 10, 'Interpreter', 'none');
+
+        % ---- bottom row: diameter-by-depth, length-by-depth, distance
+        % histogram, tortuosity-by-depth (Written by Kira Shaw with Claude
+        % Code, Aug 2026) ----------------------------------------------------
+        ax4 = axes('Parent', expFig, 'Position', pos2(1));
+        scatter(ax4, depthVals, diamVals, 10, [0.30 0.50 0.95], 'filled');
+        xlabel(ax4, 'Depth (um)');  ylabel(ax4, 'Diameter (um)');
+        title(ax4, {'Diameter by depth', statsLine(diamVals, 'um', 'nVess=')});
+        grid(ax4, 'on');
+
+        ax5 = axes('Parent', expFig, 'Position', pos2(2));
+        scatter(ax5, depthVals, lengthVals, 10, [0.90 0.20 0.20], 'filled');
+        xlabel(ax5, 'Depth (um)');  ylabel(ax5, 'Length (um)');
+        title(ax5, {'Length by depth', statsLine(lengthVals, 'um', 'nVess=')});
+        grid(ax5, 'on');
+
+        % tortuosity by depth (Written by Kira Shaw with Claude Code, Aug
+        % 2026 - swapped with the histogram below, so this sits at slot 3)
+        ax6 = axes('Parent', expFig, 'Position', pos2(3));
+        scatter(ax6, depthVals, tortVals, 10, [0.55 0.30 0.75], 'filled');
+        xlabel(ax6, 'Depth (um)');  ylabel(ax6, 'Tortuosity');
+        title(ax6, {'Tortuosity by depth', statsLine(tortVals, '', 'nVess=')});
+        grid(ax6, 'on');
+
+        ax7 = axes('Parent', expFig, 'Position', pos2(4));
+        nBins = 40;
+        [counts, edges] = histcounts(tissueDist, nBins);
+        pctVals = 100 * counts / max(sum(counts), 1);
+        binCtrs = edges(1:end-1) + diff(edges)/2;
+        bar(ax7, binCtrs, pctVals, 1, 'FaceColor', [0.20 0.45 0.75], 'EdgeColor', 'none');
+        xlabel(ax7, 'Distance (um)');  ylabel(ax7, '% of tissue');
+        title(ax7, {'Distance to nearest vessel', statsLine(tissueDist, 'um', 'nVox=')});
+        % 50th/95th percentile markers (Written by Kira Shaw with Claude
+        % Code, Aug 2026) - dotted lines at the values already shown in the
+        % results box/sgtitle, so the histogram shows where they fall.
+        hold(ax7, 'on');
+        xline(ax7, distP50Val, ':', sprintf('50th pct: %.3g um', distP50Val), ...
+            'Color', [0.10 0.35 0.10], 'LineWidth', 1.3, ...
+            'LabelVerticalAlignment', 'top', 'LabelHorizontalAlignment', 'left');
+        xline(ax7, distP95Val, ':', sprintf('95th pct: %.3g um', distP95Val), ...
+            'Color', [0.55 0.10 0.10], 'LineWidth', 1.3, ...
+            'LabelVerticalAlignment', 'top', 'LabelHorizontalAlignment', 'left');
+        hold(ax7, 'off');
+
+        % four lines (was three) - Written by Kira Shaw with Claude Code,
+        % Aug 2026 - so it doesn't run into the row of subplot titles
+        % directly beneath it, and matches the live results box (density,
+        % tortuosity, volume, distance percentiles). Reflects whichever
+        % volume definition was chosen at the start of this function - see
+        % useBoundary.
+        % Written by Kira Shaw with Claude Code, Aug 2026. "Total volume"
+        % leads every branch now, matching the live results box wording -
+        % the H x W x Z bounding-box breakdown stays here only (there's
+        % room for it in the export figure title), for the two cases where
+        % it actually applies; boundary-restricted has no such box (it's a
+        % per-frame convex hull, not a single bounding box) so it's just
+        % the number.
+        if useBoundary
+            densityTitle = sprintf('Density: %.3g m/mm^3 (boundary-restricted)   |   Mean tortuosity: %.3g', ...
+                densityVal, s.zTortuosity_mean);
+            volumeTitle = sprintf('Total volume: %.4g mm^3 (boundary-restricted tissue)', volumeVal);
+        elseif s.zSlantCorrected
+            densityTitle = sprintf('Density: %.3g m/mm^3 (slant-corrected)   |   Mean tortuosity: %.3g', ...
+                densityVal, s.zTortuosity_mean);
+            volumeTitle = sprintf(['Total volume: %.4g mm^3 (%d um (H) x %d um (W) x %d um (Z) ' ...
+                'box, tissue-slant corrected)'], ...
+                volumeVal, s.zVolumeHWZ_um(1), s.zVolumeHWZ_um(2), s.zVolumeHWZ_um(3));
+        else
+            densityTitle = sprintf('Density: %.3g m/mm^3   |   Mean tortuosity: %.3g', ...
+                densityVal, s.zTortuosity_mean);
+            volumeTitle = sprintf('Total volume: %.4g mm^3 (%d um (H) x %d um (W) x %d um (Z) box)', ...
+                volumeVal, s.zVolumeHWZ_um(1), s.zVolumeHWZ_um(2), s.zVolumeHWZ_um(3));
+        end
+        sgtitle(expFig, { ...
+            densityTitle, ...
+            volumeTitle, ...
+            sprintf('Distance to nearest vessel: 50th pct %.3g um   |   95th pct %.3g um', ...
+                distP50Val, distP95Val)});
+
+        % Written by Kira Shaw with Claude Code, Aug 2026. Flag which
+        % volume definition this figure used right in the default
+        % filename, so saving both a full-tissue and a boundary-restricted
+        % figure for the same stack doesn't overwrite one with the other.
+        if useBoundary
+            defaultName = 'VascDensity_figure_boundaryRestricted';
+        else
+            defaultName = 'VascDensity_figure';
+        end
+        [fn, fp] = uiputfile( ...
+            {'*.png','PNG image'; '*.pdf','PDF'; '*.fig','MATLAB figure'}, ...
+            'Save figure', fullfile(s.expDir, defaultName));
+        if ~isequal(fn, 0)
+            saveas(expFig, fullfile(fp, fn));
+            postUpdate(['Figure saved: ' fullfile(fp, fn)]);
+        end
+    end
+
+    % =========================================================================
+    function idx = plotStackedSlices(ax, vol, cmap)
+        % Render layered, angled slices of vol at their true depth - a
+        % pseudo-3D "light-sheet" view for the export figure (the live GUI
+        % just shows frame 1, to keep things responsive while stepping
+        % through the stack).
+        nZ = size(vol, 1);
+
+        % Written by Kira Shaw with Claude Code, Aug 2026. A sparse binary
+        % volume (the skeleton) is >99% background; a flat FaceAlpha
+        % stacks near-opaque background sheets that wash out to solid
+        % white well before the front layer, hiding every slice's skeleton
+        % points except the very last one drawn. Making alpha follow the
+        % data itself (0 = fully transparent background, 1 = opaque
+        % skeleton point) instead of a fixed value fixes that - a
+        % continuous map like the distance transform doesn't have this
+        % problem (no large flat region to wash out), so it keeps the
+        % uniform alpha it already looked fine with.
+        %
+        % Slice sampling also differs by kind (Kira's call, Aug 2026): ~10
+        % evenly-spaced slices reads fine for the distance map, but the
+        % skeleton is sparse enough that even every 2nd slice wasn't
+        % enough to make out - now every single slice.
+        isBinary = islogical(vol);
+        if isBinary
+            idx = 1:nZ;
+        else
+            idx = unique(round(linspace(1, nZ, min(10, nZ))));
+        end
+
+        [Xg, Yg] = meshgrid(1:size(vol,3), 1:size(vol,2));
+        hold(ax, 'on');
+        for k = 1:numel(idx)
+            zIdx  = idx(k);
+            sliceImg = double(squeeze(vol(zIdx,:,:)));
+            Zg = zIdx * ones(size(Xg));
+            if isBinary
+                surface(ax, Xg, Yg, Zg, sliceImg, ...
+                    'EdgeColor', 'none', 'FaceColor', 'texturemap', ...
+                    'FaceAlpha', 'texturemap', 'AlphaData', sliceImg, ...
+                    'AlphaDataMapping', 'none');
+            else
+                surface(ax, Xg, Yg, Zg, sliceImg, ...
+                    'EdgeColor', 'none', 'FaceColor', 'texturemap', 'FaceAlpha', 0.92);
+            end
+        end
+        hold(ax, 'off');
+        colormap(ax, cmap);
+        set(ax, 'YDir', 'reverse');   % match image (row 1 = top) orientation
+        % Written by Kira Shaw with Claude Code, Aug 2026 - Z increases
+        % upward by default, which put frame 1 (0 depth/shallowest) at the
+        % BOTTOM and the deepest slice at the top: upside down relative to
+        % how a stack actually sits. Reversed so 0 depth reads at the top.
+        set(ax, 'ZDir', 'reverse');
+        view(ax, -37.5, 30);
+        axis(ax, 'tight');
+        ax.XTick = [];  ax.YTick = [];  ax.ZTick = [];
+        box(ax, 'off');
+    end
+
+    % =========================================================================
+    function overlayBoundary(ax, boundaryMaskVol, idx)
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % Draws the boundary-restricted mask's per-frame outline (its
+        % convex hull - see computeBoundaryRestrictedVolume) as a 3D line
+        % at each slice plotStackedSlices already drew, on top of it, so
+        % it's visible which region is actually being restricted to.
+        % Dotted + semi-transparent (4th "alpha" element of Color, an
+        % undocumented-but-supported Line property) yellow, matching
+        % lblDensityBoundary's BOUNDARY_YELLOW results-box colour.
+        hold(ax, 'on');
+        for k = 1:numel(idx)
+            z = idx(k);
+            slice = squeeze(boundaryMaskVol(z,:,:));
+            if any(slice(:))
+                B = bwboundaries(slice);
+                for bIdx = 1:numel(B)
+                    outline = B{bIdx};   % [row col] = [y x]
+                    plot3(ax, outline(:,2), outline(:,1), z*ones(size(outline,1),1), ...
+                        'Color', [0.80 0.65 0.00 0.65], 'LineStyle', ':', 'LineWidth', 1.5);
+                end
+            end
+        end
+        hold(ax, 'off');
     end
 
     % =========================================================================
@@ -675,6 +2535,11 @@ setappdata(fig, 'state', state);
 
     % =========================================================================
     function cb_export()
+        if strcmp(ddAnalysis.Value, 'zstack')
+            cb_zExport();
+            return;
+        end
+
         s = getappdata(fig, 'state');
         if ~s.analysisRun
             uialert(fig, 'Run analysis first.', 'No results');  return;
@@ -766,6 +2631,11 @@ setappdata(fig, 'state', state);
 
     % =========================================================================
     function cb_exportFig()
+        if strcmp(ddAnalysis.Value, 'zstack')
+            cb_zExportFig();
+            return;
+        end
+
         s = getappdata(fig, 'state');
         if ~s.analysisRun
             uialert(fig, 'Run analysis first.', 'No results');  return;
@@ -907,6 +2777,298 @@ setappdata(fig, 'state', state);
         hold(dispAx, 'off');
     end
 
+    % =========================================================================
+    %  ZSTACK HELPERS  (Written by Kira Shaw with Claude Code, Aug 2026)
+    % =========================================================================
+    function renderZFrame(s, fastMode)
+        % Show the current z-slice, thresholded if the frame falls inside a
+        % segment, raw otherwise.
+        %
+        % Written by Kira Shaw with Claude Code, Aug 2026. fastMode (true
+        % while actively dragging either slider) skips the mask cleanup
+        % and skeleton preview below - running that morphology + bwskel on
+        % every tick of a drag was what made both sliders feel slow and
+        % made it hard to judge a threshold value while moving the slider.
+        % A full-quality render (cleanup + skeleton) always follows once
+        % the slider settles (ValueChangedFcn on both sliders).
+        if nargin < 2, fastMode = false; end
+        if isempty(s.zRaw), return; end
+        frame = squeeze(s.zRaw(s.zCurrentFrame, :, :));
+
+        idx = getActiveSegmentIdx(s.zSegments, s.zCurrentFrame);
+        cla(dispAx);
+        if isempty(idx)
+            imagesc(dispAx, frame);
+            colormap(dispAx, 'gray');
+            dispAx.Title.String = sprintf('Frame %d / %d  (raw)', ...
+                s.zCurrentFrame, s.zNumFrames);
+        else
+            seg = s.zSegments(idx);
+            % Written by Kira Shaw with Claude Code, Aug 2026. While a
+            % range is pending (Start range clicked, End range not yet)
+            % and Manual threshold is ticked, preview the SLIDER's live
+            % value instead of the stored segment's - the segment itself
+            % is deliberately left untouched during this phase (see
+            % cb_manualThreshChanged/cb_manualSliderChanging), specifically
+            % so dragging the slider while defining a new range can't leak
+            % into whatever's left over once the range is actually applied.
+            if ~isempty(s.zRangeStart) && chkManualThresh.Value
+                threshVal  = sldManualThresh.Value;
+                threshMode = 'manual (pending)';
+            else
+                threshVal  = seg.value;
+                threshMode = seg.mode;
+            end
+            % preview from zWorkVol (not zRaw) so this matches what
+            % buildBinaryVolume will actually threshold when smoothing is on
+            workFrame = squeeze(s.zWorkVol(s.zCurrentFrame, :, :));
+            BW2D = workFrame >= threshVal;
+
+            % ---- clean up the mask before displaying/skeletonising
+            % (Written by Kira Shaw with Claude Code, Aug 2026) - mirrors
+            % the 3D pipeline's cleanup (buildBinaryVolume's imfill/
+            % bwareaopen, plus the morphological open/close in
+            % cb_zAnalyze). Without it, a raw per-frame threshold is too
+            % speckled/fragmented for bwskel to trace a clean line down a
+            % vessel - it spirals through/fills the noisy blob instead,
+            % which is exactly what was showing up in the "Skeleton
+            % preview" overlay. Also makes the displayed threshold preview
+            % itself a more honest match for what "Process Stack" will
+            % actually build from, not just the skeleton overlay. Skipped
+            % in fastMode - see note above.
+            if ~fastMode && any(BW2D(:))
+                BW2D = imfill(BW2D, 'holes');
+                BW2D = bwareaopen(BW2D, 6, 8);
+                pxsz_preview = str2double(efPxsz.Value);
+                if ~isnan(pxsz_preview) && pxsz_preview > 0
+                    smoothRadiusPx = max(1, round(2 / pxsz_preview));  % same 2 um default as the 3D pipeline
+                    se2D = strel('disk', smoothRadiusPx);
+                    BW2D = imclose(BW2D, se2D);
+                    BW2D = imopen(BW2D, se2D);
+                end
+            end
+
+            imagesc(dispAx, BW2D);
+            dispAx.CLim = [0 1];
+            colormap(dispAx, [0 0 0; 1 1 1]);
+            % kept short - Written by Kira Shaw with Claude Code, Aug 2026
+            % - this sits right above a fairly narrow display and was
+            % getting cut off when the skeleton-preview detail used to be
+            % appended here too; that detail now goes to the "Processing
+            % updates" bar instead (see below), which is much wider.
+            titleStr = sprintf('Frame %d / %d  (%s threshold %.4g)', ...
+                s.zCurrentFrame, s.zNumFrames, threshMode, threshVal);
+
+            % ---- live skeleton preview overlay (Written by Kira Shaw with
+            % Claude Code, Aug 2026) - a quick 2D skeleton of just this
+            % frame's binarised image, so nudging Prune length shows its
+            % effect immediately without running the full 3D pipeline.
+            % Approximate (2D, this one frame only) - not a substitute for
+            % "Process Stack", just a fast visual guide for tuning pruning.
+            % Skipped in fastMode, and only posts to the RHS status bar on
+            % a full render - not on every tick while dragging.
+            if ~fastMode && isfield(s, 'zSkelPreview') && s.zSkelPreview
+                pruneVox = efPruneLen.Value;
+                if isnan(pruneVox) || pruneVox < 0, pruneVox = 0; end
+                skel2D = bwskel(BW2D, 'MinBranchLength', pruneVox);
+                hold(dispAx, 'on');
+                [sy, sx] = find(skel2D);
+                plot(dispAx, sx, sy, '.', 'Color', [1 0.15 0.15], 'MarkerSize', 4);
+                hold(dispAx, 'off');
+                postUpdate(sprintf(['Frame %d / %d  |  %s threshold %.4g  |  ' ...
+                    'skeleton preview, prune %.3g vox'], ...
+                    s.zCurrentFrame, s.zNumFrames, threshMode, threshVal, pruneVox));
+            end
+
+            % ---- live boundary-restricted outline preview (Written by
+            % Kira Shaw with Claude Code, Aug 2026) - when "Vessel
+            % boundary" is ticked, show this frame's convex hull (the same
+            % per-frame boundary computeBoundaryRestrictedVolume uses) as a
+            % dotted, semi-transparent yellow line, matching
+            % lblDensityBoundary's BOUNDARY_YELLOW results-box colour, so
+            % it's obvious while previewing which region "Process Stack"
+            % will restrict the 2nd density/distance measure to. 2D, this
+            % frame only - a quick visual guide, not the actual per-frame
+            % computation (that only runs, on the original unresampled
+            % mask, inside "Process Stack").
+            if ~fastMode && chkBoundaryRestrict.Value && any(BW2D(:))
+                hullBW = bwconvhull(BW2D);
+                Bhull = bwboundaries(hullBW);
+                hold(dispAx, 'on');
+                for bIdx = 1:numel(Bhull)
+                    outline = Bhull{bIdx};   % [row col] = [y x]
+                    plot(dispAx, outline(:,2), outline(:,1), ...
+                        'Color', [0.80 0.65 0.00 0.65], 'LineStyle', ':', 'LineWidth', 1.5);
+                end
+                hold(dispAx, 'off');
+            end
+            dispAx.Title.String = titleStr;
+        end
+        axis(dispAx, 'image');
+        dispAx.XTick = [];  dispAx.YTick = [];
+        dispAx.Title.Color = [0.45 0.45 0.45];
+    end
+
+    function idx = getActiveSegmentIdx(segments, frameIdx)
+        % Index of the segment covering frameIdx, or [] if none (no threshold).
+        idx = [];
+        for i = 1:numel(segments)
+            if frameIdx >= segments(i).startF && frameIdx <= segments(i).endF
+                idx = i;
+                return;
+            end
+        end
+    end
+
+    function val = computeThreshold(s, region, method)
+        % Auto threshold on region, in the stack's own raw units. Normalised
+        % against the WHOLE working volume's min/max (not just region's own)
+        % so thresholds computed for different frame-ranges stay comparable.
+        % Uses zWorkVol (raw, or Gaussian-smoothed if smoothing is on) so
+        % the threshold is computed on the same data it will be applied to.
+        lo = min(s.zWorkVol(:));
+        hi = max(s.zWorkVol(:));
+        if hi <= lo
+            val = lo;
+            return;
+        end
+        normRegion = (double(region) - lo) / (hi - lo);
+
+        switch method
+            case 'IsoData'
+                level = isoDataThreshold(normRegion);
+            case 'Triangle'
+                level = triangleThreshold(normRegion);
+            otherwise   % 'Otsu (recommended)'
+                level = graythresh(normRegion);
+        end
+        val = level * (hi - lo) + lo;
+    end
+
+    function method = currentMethodName()
+        % strip the "(recommended)" suffix shown in the dropdown, for
+        % passing to computeThreshold / for messages
+        method = strtrim(regexprep(ddThreshMethod.Value, '\(recommended\)', ''));
+    end
+
+    function refreshSegmentsTable(s)
+        n = numel(s.zSegments);
+        data = cell(n, 4);
+        for i = 1:n
+            data{i,1} = s.zSegments(i).startF;
+            data{i,2} = s.zSegments(i).endF;
+            data{i,3} = s.zSegments(i).mode;
+            data{i,4} = s.zSegments(i).value;
+        end
+        tblSegments.Data = data;
+    end
+
+    function txt = statsLine(vals, unit, nLabel)
+        % One-line "mean (SD ...), nLabel=count" summary for a plot title -
+        % range dropped, n labelled by what it's actually counting rather
+        % than a bare "n=" (Written by Kira Shaw with Claude Code, Aug
+        % 2026) - e.g. 'nVess=' for a per-branch stat, 'nVox=' for the
+        % distance-to-vessel sample, so it's clear at a glance without
+        % having to know which plot counts what.
+        vals = vals(:);
+        vals = vals(~isnan(vals));
+        if isempty(vals)
+            txt = sprintf('%s0', nLabel);
+            return;
+        end
+        if isempty(unit)
+            txt = sprintf('mean %.3g (SD %.3g), %s%d', mean(vals), std(vals), nLabel, numel(vals));
+        else
+            txt = sprintf('mean %.3g %s (SD %.3g), %s%d', mean(vals), unit, std(vals), nLabel, numel(vals));
+        end
+    end
+
+    function txt = nLine(vals, nLabel)
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % Just the count - for the live GUI's plot titles, which are
+        % narrower than the exported figure's and get crowded by the full
+        % mean/SD summary (see statsLine, used for the export figure).
+        % Labelled by what it's counting (nLabel, e.g. 'nVess=' or
+        % 'nVox='), not a bare "n=", per Kira's request - it wasn't
+        % obvious at a glance whether a given plot's n was vessels or
+        % voxels.
+        vals = vals(:);
+        txt = sprintf('%s%d', nLabel, sum(~isnan(vals)));
+    end
+
+    function resetDensityDisplay()
+        lblDensity.Text = {'Full tissue:', 'run "Process Stack" first'};
+        lblDensityBoundary.Text = {'Boundary restricted:', ''};
+        cla(axSkel);  cla(axDist);  cla(axDiamDepth);  cla(axLengthDepth);
+        cla(axDistHist);  cla(axTortDepth);
+        title(axSkel, 'Skeleton  (max projection)');
+        title(axDist, 'Distance to nearest vessel  (max projection, um)');
+        title(axDiamDepth, 'Diameter by depth');
+        title(axLengthDepth, 'Length by depth');
+        title(axDistHist, 'Distance to nearest vessel');
+        title(axTortDepth, 'Tortuosity by depth');
+        % blank until the next successful "Process Stack" -
+        % see zstackResultsH (Written by Kira Shaw with Claude Code, Aug 2026)
+        for h = zstackResultsH, h.Visible = 'off'; end
+    end
+
+    function BW = buildBinaryVolume(s)
+        % Apply each segment's threshold to its own frame range, producing
+        % one logical volume the same size as s.zRaw. Thresholds against
+        % zWorkVol (raw, or Gaussian-smoothed if smoothing is on).
+        BW = false(size(s.zRaw));
+        for i = 1:numel(s.zSegments)
+            seg = s.zSegments(i);
+            BW(seg.startF:seg.endF, :, :) = ...
+                s.zWorkVol(seg.startF:seg.endF, :, :) >= seg.value;
+        end
+
+        % ---- clean up the thresholded mask before it's skeletonised ---------
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % A raw voxel-wise threshold leaves small holes and salt-and-pepper
+        % speckle in the mask; bwskel's medial-axis estimate follows that
+        % raggedness rather than the vessel centre. imfill only ADDS voxels
+        % (fills fully-enclosed background), so it can't lose vessel - safe
+        % unconditionally. bwareaopen REMOVES whole connected components
+        % below the given size, which is a much bigger risk here than the
+        % "3x3x3 speck" it sounds like: z-slices are often several microns
+        % apart while xy pixels are under a micron, so a thin real vessel's
+        % per-slice cross-sections can easily fail to be 26-connected
+        % across z and end up as many small components, each under even a
+        % modest voxel count - an earlier, too-high cutoff (27) wiped out
+        % entire vessel networks this way. Kept small (6 vox - true
+        % single/couple-voxel noise only) and guarded: if it still removes
+        % most of the mask, skip it and use the filled-only mask instead of
+        % silently handing bwskel a near-empty volume.
+        if any(BW(:))
+            BW = imfill(BW, 'holes');
+            nBefore = nnz(BW);
+            BWclean = bwareaopen(BW, 6, 26);
+            if nnz(BWclean) < 0.5 * nBefore
+                postUpdate(['Despeckle step skipped (would have removed too much ' ...
+                    'of the thresholded mask) - using filled mask as-is.']);
+            else
+                BW = BWclean;
+            end
+        end
+    end
+
+    function s = refreshZWorkVol(s)
+        % Written by Kira Shaw with Claude Code, Aug 2026.
+        % Rebuilds zWorkVol - the volume threshold/skeleton logic reads
+        % from - as double(zRaw), Gaussian-smoothed (imgaussfilt3) if
+        % smoothing is on. zRaw itself is never touched, so "raw" display
+        % always shows the true data regardless of this setting.
+        if isempty(s.zRaw)
+            s.zWorkVol = [];
+        elseif s.zSmooth
+            sigma = max(0.1, s.zSmoothSigma);
+            s.zWorkVol = imgaussfilt3(double(s.zRaw), sigma);
+        else
+            s.zWorkVol = double(s.zRaw);
+        end
+    end
+
 end % MAPS
 
 % =============================================================================
@@ -924,4 +3086,359 @@ function out = applyMask(rawVess, mask)
         end
         out(i,:,:) = fr;
     end
+end
+
+% Written by Kira Shaw with Claude Code, Aug 2026.
+function segs = insertSegment(segs, newSeg)
+% insertSegment  Insert newSeg into segs (a struct array of frame-range
+% threshold segments - fields startF, endF, mode, value), splitting/
+% trimming any existing segment(s) it overlaps so the segments always
+% partition the stack with no gaps or overlaps.
+    kept = struct('startF', {}, 'endF', {}, 'mode', {}, 'value', {});
+    for i = 1:numel(segs)
+        sg = segs(i);
+        if sg.endF < newSeg.startF || sg.startF > newSeg.endF
+            kept(end+1) = sg; %#ok<AGROW> - no overlap, keep as-is
+        else
+            if sg.startF < newSeg.startF
+                left = sg;  left.endF = newSeg.startF - 1;
+                kept(end+1) = left; %#ok<AGROW>
+            end
+            if sg.endF > newSeg.endF
+                right = sg;  right.startF = newSeg.endF + 1;
+                kept(end+1) = right; %#ok<AGROW>
+            end
+        end
+    end
+    kept(end+1) = newSeg;
+    [~, ord] = sort([kept.startF]);
+    segs = kept(ord);
+end
+
+% Written by Kira Shaw with Claude Code, Aug 2026.
+% Written by Kira Shaw with Claude Code, Aug 2026.
+function [volume_mm3, boundaryMask, boundaryCoords] = ...
+    computeBoundaryRestrictedVolume(BW, pxsz_um, zstep_um)
+% computeBoundaryRestrictedVolume  A second, alternative tissue volume
+% estimate ("boundaryRestricted" throughout the exports), per Kira's
+% request. Uses the actual binarised (auto/manual-thresholded) vessel
+% mask itself to bound each frame, rather than a raw-intensity black/
+% not-black test (computeSlantCorrectedVolume) or the plain bounding box.
+%
+% For each frame independently: if it has any vessel signal, that frame's
+% "tissue" extent is the convex hull of its vessel-positive pixels
+% (bwconvhull) - the region a vessel network was actually detected
+% spanning in that frame, not just the pixels that are themselves vessel.
+% A frame with no vessel signal at all contributes zero. This is a
+% different assumption to the slant correction (which reasons from raw
+% intensity, in 10um z-bins) - this one reasons from the thresholded
+% vessel mask itself, per individual frame.
+%
+%INPUTS
+% BW       : binarised vessel volume, frames x H x W - the STRAIGHT
+%            thresholded mask (before any resampling/mask-smoothing)
+% pxsz_um  : xy pixel size, microns
+% zstep_um : z-step, microns (this volume's true per-frame thickness)
+%OUTPUTS
+% volume_mm3     : boundary-restricted tissue volume estimate, mm^3
+% boundaryMask   : logical, same size as BW - the per-frame convex hull
+% boundaryCoords : cell array, one cell per frame - each an Nx2 [x,y]
+%                  matrix of that frame's boundary outline (pixel
+%                  coordinates), or empty if that frame had no signal.
+%                  Written by Kira Shaw with Claude Code, Aug 2026 - so
+%                  the boundary itself can be exported/re-plotted, not
+%                  just the area/volume it works out to.
+
+nZ = size(BW, 1);
+volume_mm3 = 0;
+boundaryMask = false(size(BW));
+boundaryCoords = cell(nZ, 1);
+for z = 1:nZ
+    frameBW = squeeze(BW(z,:,:));
+    if any(frameBW(:))
+        hull = bwconvhull(frameBW);
+        boundaryMask(z,:,:) = hull;
+        volume_mm3 = volume_mm3 + nnz(hull) * (pxsz_um^2) * zstep_um / 1000^3;
+        B = bwboundaries(hull);
+        if ~isempty(B)
+            % bwboundaries returns [row col] = [y x]; store as [x y] for
+            % the more conventional plotting/export order
+            boundaryCoords{z} = [B{1}(:,2), B{1}(:,1)];
+        end
+    end
+end
+
+end
+
+function [volume_mm3, tissueMask] = computeSlantCorrectedVolume(zRaw, pxsz_um, zstep_um)
+% computeSlantCorrectedVolume  Tissue volume estimate that accounts for a
+% stack imaged at a slight angle to the tissue surface, where a plain
+% rectangular W x H x D box overstates the true volume - part of that box,
+% at some depths, is genuinely outside the tissue (black/empty), not
+% background tissue, so treating the whole box as tissue understates
+% density.
+%
+% Bins the stack into ~10 micron z-slabs (rounded to the nearest whole
+% frame using the stack's own z-step, so this behaves consistently
+% whatever the step size happened to be for a given session). Within each
+% slab, an xy pixel counts as "in tissue" if it has any signal above a
+% near-zero floor in ANY frame of that slab; a pixel that never rises
+% above that floor for the WHOLE slab is judged to be outside the tissue
+% for that depth range - real tissue background/noise essentially never
+% reads at exactly the stack's minimum across many consecutive frames the
+% way a padded/unscanned region would.
+%
+% Also returns the full 3D tissue mask (Written by Kira Shaw with Claude
+% Code, Aug 2026) - not just the volume number - so the caller can apply
+% the SAME "what counts as tissue" definition to other stats (the tissue-
+% to-vessel distance percentiles/histogram, in particular) rather than
+% having density be slant-corrected while everything else still samples
+% from the full uncorrected box.
+%
+%INPUTS
+% zRaw     : raw z-stack, frames x H x W
+% pxsz_um  : xy pixel size, microns
+% zstep_um : z-step, microns
+%OUTPUTS
+% volume_mm3 : corrected tissue volume estimate, mm^3
+% tissueMask : logical, same size as zRaw - true where a voxel's xy
+%              location was judged "in tissue" for its z-slab
+
+nZ = size(zRaw, 1);
+binFrames = max(1, round(10 / zstep_um));   % ~10 um per bin
+
+loVal = min(zRaw(:));
+hiVal = max(zRaw(:));
+% tolerance above the true minimum - real signal essentially never reads
+% exactly the minimum across a whole bin's worth of frames, so a small
+% margin catches noise right at the floor without also catching dim but
+% real tissue
+blackThresh = loVal + 0.02 * (hiVal - loVal);
+
+volume_mm3 = 0;
+tissueMask = false(size(zRaw));
+startF = 1;
+while startF <= nZ
+    endF = min(nZ, startF + binFrames - 1);
+    slab = zRaw(startF:endF, :, :);
+    inTissue = squeeze(any(slab > blackThresh, 1));   % H x W logical
+    slabThick_um = (endF - startF + 1) * zstep_um;
+    volume_mm3 = volume_mm3 + nnz(inTissue) * (pxsz_um^2) * slabThick_um / 1000^3;
+    nFramesInSlab = endF - startF + 1;
+    tissueMask(startF:endF, :, :) = repmat(reshape(inTissue, [1, size(inTissue)]), ...
+        nFramesInSlab, 1, 1);
+    startF = endF + 1;
+end
+
+end
+
+% Written by Kira Shaw with Claude Code, Aug 2026.
+function branches = extractBranches(skel, distMap, voxSize)
+% extractBranches  Approximate per-branch length/diameter/depth from a 3D
+% skeleton - a simplified stand-in for Fiji's AnalyzeSkeleton_ graph (which
+% has no MATLAB equivalent to call directly).
+%
+% Junction voxels (skeleton voxels with >=3 26-connected skeleton
+% neighbours) are removed; each remaining 26-connected component is one
+% branch. This leaves the junction voxel itself out of each branch's
+% length - a small underestimate versus Fiji's edge-based accounting -
+% but keeps the algorithm tractable without a full voxel graph across the
+% whole skeleton.
+%
+% Length/depth (Written by Kira Shaw with Claude Code, Aug 2026, replacing
+% a plain minimum-spanning-tree sum): bwskel's medial axis on a "fat"
+% vessel (large diameter relative to its length, or to voxel size) isn't
+% one well-defined line - small surface bumps nudge it off-centre from
+% one cross-section to the next, giving a swirl rather than a straight
+% path, most visible on large vessels. A raw MST length just sums that
+% swirl. Instead: build the same 26-connectivity graph, walk it end to
+% end (the graph's diameter - the shortest path between its two most
+% distant voxels, found via a standard double-BFS/Dijkstra), giving an
+% ORDERED sequence of points along the branch, then smooth that sequence
+% (moving average) before summing consecutive distances for length and
+% averaging depth. Diameter isn't path-dependent, so it's untouched -
+% still the mean local radius (distMap) over every voxel in the branch.
+%
+% Tortuosity (Written by Kira Shaw with Claude Code, Aug 2026): the
+% smoothed skeleton path IS the actual route (length_um above); "as the
+% crow flies" is the straight-line distance between that same smoothed
+% path's start and end points. tortuosity = actual / straight-line - 1.0
+% is perfectly straight, higher is more tortuous. NaN if the two ends
+% coincide (degenerate/zero-length chord).
+%
+%INPUTS
+% skel    : 3D logical skeleton (Z x Y x X), one voxel wide
+% distMap : 3D distance-to-nearest-vessel map, same size, in microns
+% voxSize : [zSize, ySize, xSize] physical voxel size, microns (post any
+%           isotropic resampling done by the caller)
+%OUTPUTS
+% branches : struct array, one element per branch: length_um, diam_um,
+%            depth_um (mean z position, physical, from the smoothed
+%            centreline), tortuosity, nVoxels
+
+nbrCount  = convn(double(skel), ones(3,3,3), 'same') - 1;
+junction  = skel & (nbrCount >= 3);
+segVoxels = skel & ~junction;
+
+CC      = bwconncomp(segVoxels, 26);
+nBranch = CC.NumObjects;
+maxStep = sqrt(sum(voxSize.^2));   % longest possible single 26-conn voxel step
+
+branches = struct('length_um', {}, 'diam_um', {}, 'depth_um', {}, ...
+    'tortuosity', {}, 'nVoxels', {});
+for i = 1:nBranch
+    idx = CC.PixelIdxList{i};
+    if numel(idx) < 2
+        continue;   % single isolated voxel - not a measurable segment
+    end
+    [zz, yy, xx] = ind2sub(size(skel), idx);
+    coordsPhys = double([zz, yy, xx]) .* voxSize;   % Nx3, physical microns
+
+    % ---- 26-connectivity graph over this branch's voxels -----------------
+    n  = numel(idx);
+    dx = coordsPhys(:,1) - coordsPhys(:,1)';
+    dy = coordsPhys(:,2) - coordsPhys(:,2)';
+    dz = coordsPhys(:,3) - coordsPhys(:,3)';
+    D  = sqrt(dx.^2 + dy.^2 + dz.^2);
+
+    adjMask  = (D > 0) & (D <= maxStep + 1e-6);
+    [ii, jj] = find(triu(adjMask));
+
+    if isempty(ii)
+        % no 26-connectivity edges at all (shouldn't happen for a
+        % bwconncomp-connected component, but stay safe) - fall back to
+        % the raw voxel set, unsmoothed
+        length_um  = 0;
+        depth_um   = mean(coordsPhys(:,1));
+        tortuosity = NaN;
+    else
+        w = D(sub2ind([n n], ii, jj));
+        G = graph(ii, jj, w, n);
+
+        % walk the graph's diameter (double-BFS/Dijkstra: farthest node
+        % from an arbitrary start, then farthest node from THAT one) to
+        % get the two most distant voxels, then the ordered path between
+        % them - this is the "unroll the branch into a line" step
+        distFrom1      = distances(G, 1);
+        [~, endA]      = max(distFrom1);
+        distFromEndA   = distances(G, endA);
+        [~, endB]      = max(distFromEndA);
+        pathNodes      = shortestpath(G, endA, endB);
+
+        pathCoords = coordsPhys(pathNodes, :);
+        if size(pathCoords, 1) >= 3
+            winSize      = min(7, size(pathCoords, 1));
+            smoothCoords = smoothdata(pathCoords, 1, 'movmean', winSize);
+        else
+            smoothCoords = pathCoords;
+        end
+
+        segLen    = sqrt(sum(diff(smoothCoords, 1, 1).^2, 2));
+        length_um = sum(segLen);
+        depth_um  = mean(smoothCoords(:,1));   % z = depth
+
+        % tortuosity: actual (skeleton) path length / straight-line chord
+        % between the same path's start and end
+        chordLength = norm(smoothCoords(end,:) - smoothCoords(1,:));
+        if chordLength > 0
+            tortuosity = length_um / chordLength;
+        else
+            tortuosity = NaN;
+        end
+    end
+
+    branches(end+1).length_um  = length_um; %#ok<AGROW>
+    branches(end).diam_um      = 2 * mean(distMap(idx));
+    branches(end).depth_um     = depth_um;
+    branches(end).tortuosity   = tortuosity;
+    branches(end).nVoxels      = n;
+end
+
+end
+
+% Written by Kira Shaw with Claude Code, Aug 2026.
+function p = pctileLocal(x, pct)
+% pctileLocal  Percentile(s) of x via linear interpolation on the empirical
+% CDF (same convention as MATLAB's own prctile) - written locally so this
+% doesn't pull in the Statistics and Machine Learning Toolbox just for
+% this one thing.
+%INPUTS
+% x   : data vector (NaNs ignored)
+% pct : percentile(s) wanted, in [0,100] - scalar or vector
+%OUTPUTS
+% p   : percentile value(s), same size as pct
+    x = sort(x(~isnan(x)));
+    n = numel(x);
+    if n == 0
+        p = nan(size(pct));
+        return;
+    end
+    if n == 1
+        p = repmat(x, size(pct));
+        return;
+    end
+    posK = 100*((1:n) - 0.5) / n;
+    p = interp1(posK, x, pct, 'linear', 'extrap');
+    p = min(max(p, x(1)), x(end));   % extrap can slightly overshoot past the ends
+end
+
+% Written by Kira Shaw with Claude Code, Aug 2026.
+function level = isoDataThreshold(I)
+% isoDataThreshold  Classic iterative intermeans (Ridler-Calvard) threshold
+% on I (values in [0,1]). Close to ImageJ's "Default" method. Returns a
+% level in [0,1].
+    counts     = histcounts(I(:), 256, 'BinLimits', [0 1]);
+    binCenters = linspace(1/512, 1-1/512, 256);
+
+    T = mean(I(:));
+    for it = 1:100   % fixed iteration cap in case convergence is never reached
+        below = binCenters <= T;
+        if ~any(below) || all(below)
+            break;
+        end
+        m1 = sum(binCenters(below)  .* counts(below))  / max(sum(counts(below)),  eps);
+        m2 = sum(binCenters(~below) .* counts(~below)) / max(sum(counts(~below)), eps);
+        newT = (m1 + m2) / 2;
+        if abs(newT - T) < 1e-4
+            T = newT;
+            break;
+        end
+        T = newT;
+    end
+    level = T;
+end
+
+% Written by Kira Shaw with Claude Code, Aug 2026.
+function level = triangleThreshold(I)
+% triangleThreshold  Zack/Rogers/Latt "triangle" threshold on I (values in
+% [0,1]): draws a line from the histogram's peak to its far tail and picks
+% the bin with the greatest perpendicular distance from that line. Returns
+% a level in [0,1].
+    counts     = histcounts(I(:), 256, 'BinLimits', [0 1]);
+    binCenters = linspace(1/512, 1-1/512, 256);
+
+    [peakVal, peakIdx] = max(counts);
+    nz      = find(counts > 0);
+    firstNZ = nz(1);
+    lastNZ  = nz(end);
+
+    if (peakIdx - firstNZ) > (lastNZ - peakIdx)
+        endIdx   = firstNZ;
+        rangeIdx = endIdx:peakIdx;
+    else
+        endIdx   = lastNZ;
+        rangeIdx = peakIdx:endIdx;
+    end
+
+    x1 = peakIdx;  y1 = peakVal;
+    x2 = endIdx;   y2 = counts(endIdx);
+
+    xr = rangeIdx;
+    yr = counts(rangeIdx);
+    dists = abs((y2-y1).*xr - (x2-x1).*yr + x2*y1 - y2*x1) ./ ...
+        sqrt((y2-y1)^2 + (x2-x1)^2 + eps);
+
+    [~, mi]  = max(dists);
+    thrIdx   = rangeIdx(mi);
+    level    = binCenters(thrIdx);
 end
