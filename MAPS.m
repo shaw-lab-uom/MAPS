@@ -222,33 +222,51 @@ lblZFrame = uilabel(fig, ...
 % Boxed to match the zstack side's Preprocessing panel (Written by Kira
 % Shaw with Claude Code, Aug 2026) - same native-title/border/tint
 % treatment, just for consistency between the two modes.
+% Grown downward by 34px (96->130px tall, y 212->178) to fit the new
+% Perivascular Calcium row below Draw-branch - grown DOWN rather than up
+% since there's only ~12px clear above (to dispAx's bottom edge) but ~80px
+% free below (down to the Parameters panel), so the existing rows are
+% shifted up within the taller panel to make room at the bottom, and the
+% panel's own top edge - and dispAx's clearance from it - is unchanged
+% (Kira Shaw with Claude Code, Aug 2026).
 pnlProcOptions = uipanel(fig, ...
-    'Position',        P(LX,212,LW,96), ...
+    'Position',        P(LX,178,LW,130), ...
     'Title',           'Preprocessing', ...
     'FontWeight',      'bold', ...
     'BackgroundColor', [0.97 0.97 0.98]);
 
 btnSkel = uibutton(pnlProcOptions, ...
-    'Position',        P(LX,44,172,28), ...
+    'Position',        P(LX,78,172,28), ...
     'Text',            'Generate skeleton', ...
     'FontSize',        F(11), ...
     'ButtonPushedFcn', @(~,~) cb_generateSkeleton());
 
-lblSkelTick = uilabel(pnlProcOptions, 'Position', P(188,42,30,30), ...
+lblSkelTick = uilabel(pnlProcOptions, 'Position', P(188,76,30,30), ...
     'Text', '', 'FontSize', F(20), 'FontColor', [0.10 0.70 0.20]);
 
 btnBranch = uibutton(pnlProcOptions, ...
-    'Position',        P(LX,8,210,28), ...
+    'Position',        P(LX,42,210,28), ...
     'Text',            'Draw around vessel branch', ...
     'FontSize',        F(11), ...
     'ButtonPushedFcn', @(~,~) cb_drawBranch());
 
-lblBranchTick = uilabel(pnlProcOptions, 'Position', P(226,6,30,30), ...
+lblBranchTick = uilabel(pnlProcOptions, 'Position', P(226,40,30,30), ...
     'Text', '', 'FontSize', F(20), 'FontColor', [0.10 0.70 0.20]);
+
+% Perivascular calcium (optional second channel/TIF) - ticking prompts for
+% a second TIF file to associate with this recording; what's actually done
+% with it analysis-wise is still being worked out, this is just getting
+% the file association ready (Kira Shaw with Claude Code, Aug 2026).
+chkPerivascularCa = uicheckbox(pnlProcOptions, ...
+    'Position',        P(LX,8,220,22), ...
+    'Text',            'Perivascular Calcium', ...
+    'Value',           false, 'FontSize', F(11), ...
+    'ValueChangedFcn', @(src,~) cb_perivascularCaChanged(src));
 
 % group of xyDiam-only left-panel controls, shown/hidden as one by the
 % Analysis dropdown (see cb_analysisChanged)
-xyDiamLeftH = [pnlProcOptions, btnSkel, lblSkelTick, btnBranch, lblBranchTick];
+xyDiamLeftH = [pnlProcOptions, btnSkel, lblSkelTick, btnBranch, lblBranchTick, ...
+    chkPerivascularCa];
 
 % ---- Preprocessing panel (zstack) ------------------------------------------
 % Written by Kira Shaw with Claude Code, Aug 2026.
@@ -463,8 +481,13 @@ lsWinVertSlider = uislider(fig, ...
 % optional but (if used) invalidates everything below it; Binarise next
 % since RBC detection depends on it (Written by Kira Shaw with Claude
 % Code, Aug 2026).
+% Moved up (y 136->152) and grown (h 118->122) - was only 4px clear of the
+% Parameters panel below it, visually reading as overlapping; there was
+% 35px of slack above (to lsWinAx) to take this from, so both edges are
+% now comfortably clear (~20px below, ~15px above) - Kira Shaw with Claude
+% Code, Aug 2026.
 pnlLsProc = uipanel(fig, ...
-    'Position',        P(LX,136,LW,118), ...
+    'Position',        P(LX,152,LW,122), ...
     'Title',           'Preprocessing', ...
     'FontWeight',      'bold', ...
     'BackgroundColor', [0.97 0.97 0.98], ...
@@ -538,48 +561,51 @@ linescanLeftH_part1 = [lblLsFrameHdr, lblLsFrame, lsFrameSlider, ...
     btnLsRBC, lblLsRBCStatus];
 
 % ---- Parameters panel -------------------------------------------------------
-% Shrunk to 80px tall (was 88px) - just tighter gaps/padding, the fields
-% themselves are unchanged - to give the Preprocessing panel above the
-% room it needs. Written by Kira Shaw with Claude Code, Aug 2026.
+% Grown back to 90px tall (was 80px) - linescan's row 2 (Pixel size +
+% the scan-velocity-correction checkbox crammed beside it) was overlapping
+% below/wrapping, since that checkbox's text didn't actually fit its old
+% width. There was 20px of slack freed up above (pnlLsProc having since
+% moved up) to take the extra 10px from, keeping a 10px gap to pnlLsProc's
+% own bottom edge (Kira Shaw with Claude Code, Aug 2026).
 pnl = uipanel(fig, ...
-    'Position',        P(LX,52,LW,80), ...
+    'Position',        P(LX,52,LW,90), ...
     'Title',           'Parameters', ...
     'FontWeight',      'bold', ...
     'BackgroundColor', [1 1 1]);
 
 % row 1 is mode-dependent: xyDiam wants no. of branches, zstack wants
 % z-step (which xyDiam has no use for) - same slot, toggled visibility
-lblNBranch = uilabel(pnl, 'Position', P(10,42,110,18), ...
+lblNBranch = uilabel(pnl, 'Position', P(10,48,110,18), ...
     'Text', 'No. of branches:', 'FontSize', F(10));
 efNBranch = uieditfield(pnl, 'numeric', ...
-    'Position', P(122,42,45,18), 'Value', 1, 'Limits', [1 5], 'FontSize', F(10));
+    'Position', P(122,48,45,18), 'Value', 1, 'Limits', [1 5], 'FontSize', F(10));
 
-lblZstep = uilabel(pnl, 'Position', P(10,42,110,18), ...
+lblZstep = uilabel(pnl, 'Position', P(10,48,110,18), ...
     'Text', 'Z-step (microns):', 'FontSize', F(10), 'Visible', 'off');
 efZstep = uieditfield(pnl, 'text', ...
-    'Position', P(122,42,80,18), 'Value', '', 'FontSize', F(10), ...
+    'Position', P(122,48,80,18), 'Value', '', 'FontSize', F(10), ...
     'Placeholder', 'blank = n/a', 'Visible', 'off');
 
 % Linescan: lines per second (auto-computed, read-only display)
-lblLps = uilabel(pnl, 'Position', P(10,42,110,18), ...
+lblLps = uilabel(pnl, 'Position', P(10,48,110,18), ...
     'Text', 'Lines per second:', 'FontSize', F(10), 'Visible', 'off');
 efLps = uieditfield(pnl, 'text', ...
-    'Position', P(122,42,80,18), 'Value', '', 'FontSize', F(10), ...
+    'Position', P(122,48,80,18), 'Value', '', 'FontSize', F(10), ...
     'Editable', false, 'Visible', 'off');
 
 % Linescan: window size — right side of same row as Lines per second
-lblLsWinSzParam = uilabel(pnl, 'Position', P(212,42,72,18), ...
+lblLsWinSzParam = uilabel(pnl, 'Position', P(212,48,72,18), ...
     'Text', 'Window (ms):', 'FontSize', F(10), 'Visible', 'off');
 efLsWinSz = uieditfield(pnl, 'numeric', ...
-    'Position',        P(286,42,58,18), ...
+    'Position',        P(286,48,58,18), ...
     'Value',           40, 'Limits', [4 10000], 'FontSize', F(10), ...
     'Visible',         'off', ...
     'ValueChangedFcn', @(~,~) cb_lsWinSzChanged());
 
-uilabel(pnl, 'Position', P(10,22,110,18), ...
+uilabel(pnl, 'Position', P(10,26,110,18), ...
     'Text', 'Pixel size (microns):', 'FontSize', F(10));
 efPxsz = uieditfield(pnl, 'text', ...
-    'Position', P(122,22,80,18), 'Value', '', 'FontSize', F(10), ...
+    'Position', P(122,26,80,18), 'Value', '', 'FontSize', F(10), ...
     'Placeholder', 'blank = pixels');
 
 % Linescan: scan-velocity (Vscan) correction, named for the equation it
@@ -591,18 +617,23 @@ efPxsz = uieditfield(pnl, 'text', ...
 % approaches Vscan, so it's an explicit choice rather than always-on
 % (variable name kept as chkLsCharpak internally for continuity with
 % earlier discussion of this feature - Kira Shaw with Claude Code, Aug 2026).
+% Text shortened to fit its 193px-wide slot at F(9) without wrapping - the
+% full description ("Apply scan-velocity correction (Vscan)...") was
+% wrapping to multiple lines and running into the row below; kept as the
+% Tooltip instead (Kira Shaw with Claude Code, Aug 2026).
 chkLsCharpak = uicheckbox(pnl, ...
-    'Position', P(212,22,LW-222,18), ...
-    'Text',     'Apply scan-velocity correction (Vscan)', ...
+    'Position', P(212,26,LW-222,18), ...
+    'Text',     'Vscan correction', ...
     'Value',    false, 'FontSize', F(9), 'Visible', 'off', ...
-    'Tooltip',  ['Corrects apparent velocity for the finite line-scan sweep ' ...
-        'rate (Vscan) - see README. Can wipe out most of the trace if ' ...
-        'unstable for this Vscan (see Processing updates)']);
+    'Tooltip',  ['Apply scan-velocity correction (Vscan): corrects apparent ' ...
+        'velocity for the finite line-scan sweep rate - see README. Can ' ...
+        'wipe out most of the trace if unstable for this Vscan (see ' ...
+        'Processing updates)']);
 
-uilabel(pnl, 'Position', P(10,2,110,18), ...
+uilabel(pnl, 'Position', P(10,4,110,18), ...
     'Text', 'Frame rate (Hz):', 'FontSize', F(10));
 efFPS = uieditfield(pnl, 'text', ...
-    'Position', P(122,2,80,18), 'Value', '', 'FontSize', F(10), ...
+    'Position', P(122,4,80,18), 'Value', '', 'FontSize', F(10), ...
     'Placeholder', 'blank = frames');
 
 % Complete linescanLeftH now that lblLsWinSzParam and efLsWinSz exist
@@ -924,6 +955,8 @@ btnExportFig = uibutton(fig, ...
 state.rawVess       = [];
 state.expDir        = '';
 state.frame50       = [];
+state.perivascularCaPath = '';  % xyDiam: optional second TIF (perivascular
+                                 % calcium) - path only for now, analysis TBD
 state.skeletons     = {};
 state.masks         = {};
 state.perpEndpts    = {};
@@ -1279,6 +1312,11 @@ setappdata(fig, 'state', state);
             s.perpEndpts  = {};  s.cont_diams = {};
             s.skelDrawn   = false;  s.branchesDrawn = false;
             s.analysisRun = false;
+            % A previously-associated perivascular calcium TIF belongs to
+            % whichever vessel recording was loaded before - don't carry it
+            % over to a new one (Kira Shaw with Claude Code, Aug 2026).
+            s.perivascularCaPath = '';
+            chkPerivascularCa.Value = false;
             setappdata(fig, 'state', s);
 
             % show frame in display axes
@@ -2866,6 +2904,39 @@ setappdata(fig, 'state', state);
         postUpdate('Branch ROIs drawn.  Press GO to run analysis.');
     end
 
+    % -------------------------------------------------------------------------
+    function cb_perivascularCaChanged(src)
+    % Ticking prompts for a second TIF (perivascular calcium) to associate
+    % with this recording - stores the path only for now; what's actually
+    % done with it analysis-wise is still to be worked out. Unticking
+    % clears the stored path rather than leaving it stale for a re-tick
+    % (Kira Shaw with Claude Code, Aug 2026).
+        s = getappdata(fig, 'state');
+        if ~src.Value
+            s.perivascularCaPath = '';
+            setappdata(fig, 'state', s);
+            return;
+        end
+        startDir = s.expDir;
+        if isempty(startDir) || ~isfolder(startDir)
+            startDir = pwd;
+        end
+        if isempty(startDir) || ~isfolder(startDir)
+            startDir = '';
+        end
+        [tifName, tifFolder] = uigetfile( ...
+            {'*.tif;*.tiff', 'TIF / OME-TIF files (*.tif, *.tiff, *.ome.tif, *.ome.tiff)'}, ...
+            'Select perivascular calcium TIF file', startDir);
+        if isequal(tifName, 0)
+            src.Value = false;   % cancelled - revert the tick
+            return;
+        end
+        s.perivascularCaPath = fullfile(tifFolder, tifName);
+        setappdata(fig, 'state', s);
+        postUpdate(['Perivascular calcium TIF selected: ' s.perivascularCaPath ...
+            '  (not yet used in analysis)']);
+    end
+
     % =========================================================================
     function cb_go()
         s = getappdata(fig, 'state');
@@ -3729,15 +3800,17 @@ setappdata(fig, 'state', state);
         imagesc(dispAx, frame_data);
         colormap(dispAx, 'gray');
         axis(dispAx, 'image');
-        % Direction of the window sweep within the frame - flipped per Kira
-        % Shaw's repeated, screenshot-confirmed report that it was still
-        % running bottom-to-top after the previous 'reverse' attempt (which
-        % had tested correct in isolation but evidently wasn't what the
-        % real running app showed); this + the matching flips in the
-        % slider-sync/drag formulas below and in ls_refreshBinaryDisplay
-        % are the full, consistent set of places this convention lives
-        % (Kira Shaw with Claude Code, Aug 2026).
-        dispAx.YDir = 'normal';
+        % Row 1 (earliest time) must render at the TOP. Reverted back to
+        % 'reverse' - the intervening switch to 'normal' was disproven by
+        % an actual rendered/exported test image (a known-gradient frame
+        % with this exact imagesc+rectangle code: 'normal' put row 1 at the
+        % BOTTOM, confirmed both by the gradient shading and by Kira Shaw's
+        % screenshot of window 1 sitting at the bottom right after Load
+        % Data), while the same test with 'reverse' put row 1 exactly at
+        % the top. The slider's inverted sync/drag formulas were already
+        % the correct pairing for 'reverse' and are untouched here (Kira
+        % Shaw with Claude Code, Aug 2026).
+        dispAx.YDir = 'reverse';
         xlabel(dispAx, 'Spatial pixel');
         ylabel(dispAx, 'Scan line (time ↓)');
         title(dispAx, sprintf('Raw  —  frame %d / %d', f, nF));
@@ -3767,14 +3840,21 @@ setappdata(fig, 'state', state);
         end
 
         % Sync the per-frame vertical window slider, and its live value
-        % readout (1 at top, maxLr at bottom). Direct (not inverted)
-        % mapping to match the dispAx.YDir flip above - Kira Shaw with
-        % Claude Code, Aug 2026.
+        % readout (1 at top, maxLr at bottom). INVERTED mapping restored -
+        % the dispAx.YDir flip above was the only change actually needed to
+        % fix the rectangle's direction; the slider is a separate widget
+        % with its own native min=bottom/max=top convention, independent of
+        % any axes' YDir, so removing ITS inversion too was a second,
+        % unneeded flip that put the slider (and the window it feeds to the
+        % preview/RBC detection) out of sync with the now-correct rectangle
+        % - confirmed by Kira Shaw: box direction fixed, but slider resting
+        % position and RBC counts were then wrong. Restored to match the
+        % rectangle again (Kira Shaw with Claude Code, Aug 2026).
         if winPx > 0 && nT > 0
             maxLr = max(2, nT - winPx + 1);
             lsWinVertSlider.Limits = [1, maxLr];
             lr0_clamped = max(1, min(maxLr, lr0));
-            lsWinVertSlider.Value = lr0_clamped;
+            lsWinVertSlider.Value = max(1, min(maxLr, maxLr - lr0_clamped + 1));
             lblLsWinVertVal.Text = sprintf('%d/%d', lr0_clamped, maxLr);
         end
 
@@ -3878,7 +3958,7 @@ setappdata(fig, 'state', state);
         stepPx = s.lsStepSz_px;
         maxLr  = max(1, nT - winPx + 1);
         slVal  = lsWinVertSlider.Value;
-        lr0 = max(1, min(maxLr, round(slVal)));  % direct - matches the flipped sync/YDir above
+        lr0 = max(1, min(maxLr, maxLr - round(slVal) + 1));  % inverted - see renderLsFrame sync
         abs_c0 = (f-1)*nT + lr0;
         w = max(1, min(s.lsNumWins, round((abs_c0-1)/stepPx) + 1));
         s.lsCurrentWin    = w;
@@ -3965,8 +4045,9 @@ setappdata(fig, 'state', state);
     function cb_lsWinVertSlider(value, fastMode)
     % Vertical slider on the left of the linescan display: moves the yellow window
     % band up/down within the current frame without changing the frame.
-    % Direct (not inverted) mapping - matches the flipped sync/YDir in
-    % renderLsFrame (Kira Shaw with Claude Code, Aug 2026).
+    % Inverted mapping (slider top/high value = window at top of frame) -
+    % see the matching restoration note in renderLsFrame's sync block
+    % (Kira Shaw with Claude Code, Aug 2026).
         if nargin < 2, fastMode = false; end
         s = getappdata(fig, 'state');
         if isempty(s.lsRawLine), return; end
@@ -3975,7 +4056,7 @@ setappdata(fig, 'state', state);
         stepPx = s.lsStepSz_px;
         f      = s.lsCurrentFrame;
         maxLr  = max(1, nT - winPx + 1);
-        lr0 = max(1, min(maxLr, round(value)));
+        lr0 = max(1, min(maxLr, maxLr - round(value) + 1));  % inverted - see renderLsFrame sync
         % convert local row in frame to absolute time column, then to window index
         abs_c0 = (f-1)*nT + lr0;
         w = max(1, min(s.lsNumWins, round((abs_c0-1)/stepPx) + 1));
@@ -4040,10 +4121,19 @@ setappdata(fig, 'state', state);
             postUpdate(sprintf('Angle check: SNR=%.1f (too low). Check imaging quality.', snr));
         elseif theta > 2
             direction = 'retrograde';
-            dirTxt    = sprintf('Retrograde scan  (%.1f deg, SNR=%.0f)', theta, snr);
+            % Slant description + correction recommendation confirmed
+            % empirically against this exact Radon pipeline, then set by
+            % Kira Shaw's own rule from direct RBC-slant observation:
+            % higher-LHS/lower-RHS <-> positive theta/vel_app <-> this
+            % 'retrograde' branch <-> correction recommended (Aug 2026).
+            dirTxt = sprintf(['Retrograde scan  (%.1f deg, SNR=%.0f)   ' ...
+                char(8600) ' RBC slant: higher-LHS, lower-RHS - Vscan ' ...
+                'correction RECOMMENDED (Chaigneau & Charpak, 2022)'], theta, snr);
         elseif theta < -2
             direction = 'anterograde';
-            dirTxt    = sprintf('Anterograde/wrong-way scan  (%.1f deg, SNR=%.0f)', theta, snr);
+            dirTxt = sprintf(['Anterograde/wrong-way scan  (%.1f deg, SNR=%.0f)   ' ...
+                char(8599) ' RBC slant: lower-LHS, higher-RHS - Vscan ' ...
+                'correction NOT recommended'], theta, snr);
         else
             direction = 'uncertain';
             dirTxt    = sprintf('Direction uncertain  (|theta|<2 deg, SNR=%.0f)', snr);
@@ -4069,7 +4159,14 @@ setappdata(fig, 'state', state);
         s.lsBinaryLine = s.lsRawLine >= thresh;   % true=bright (plasma)
         s.lsBinarised  = true;
         setappdata(fig, 'state', s);
-        ls_refreshBinaryDisplay(s);
+        % Refresh both panels from the same state together (renderLsFrame
+        % redraws dispAx and, at its own end, calls ls_refreshBinaryDisplay
+        % too) rather than just the binary one - the raw panel's window
+        % rectangle was reported jumping out of sync with the (unaffected)
+        % slider on Binarise, and this guarantees the two panels can't
+        % desync regardless of the exact cause (Kira Shaw with Claude
+        % Code, Aug 2026).
+        renderLsFrame(s);
         sldLsThresh.Enable = 'on';
         btnLsRBC.Enable    = 'on';
     end
@@ -4089,7 +4186,7 @@ setappdata(fig, 'state', state);
         imagesc(lsBinaryAx, frame_bin, [0 1]);
         colormap(lsBinaryAx, 'gray');
         axis(lsBinaryAx, 'image');
-        lsBinaryAx.YDir = 'normal';   % matches the flipped dispAx above
+        lsBinaryAx.YDir = 'reverse';   % matches dispAx above - see its comment
         title(lsBinaryAx, sprintf('Binary  (thresh=%.2f)', s.lsThresh));
         xlabel(lsBinaryAx, 'Spatial pixel');
         ylabel(lsBinaryAx, 'Scan line (time ↓)');
@@ -4121,7 +4218,7 @@ setappdata(fig, 'state', state);
         s.lsBinarised  = true;
         setappdata(fig, 'state', s);
         if ~fastMode
-            ls_refreshBinaryDisplay(s);
+            renderLsFrame(s);   % refreshes both panels together - see cb_lsBinarise
             renderLsWindow(s);
         end
     end
@@ -4369,6 +4466,18 @@ setappdata(fig, 'state', state);
         lblLsAngleResult.Text = '';
         lblLsAngleRight.Text  = '';
         renderLsFrame(s);
+        % The live run specifically needs the OTHER axis direction to sweep
+        % correctly - confirmed working before, then broken again when the
+        % pre-Run/idle state's direction was fixed separately (both call
+        % the same renderLsFrame, which can only set one direction at a
+        % time) - Kira Shaw was explicit this is purely a live-display
+        % request, scoped only to the run, and that the pre-Run state
+        % (fixed via renderLsFrame's own default) should stay as it is.
+        % Overridden here, right after every renderLsFrame call for the
+        % duration of the run, rather than in renderLsFrame itself (Kira
+        % Shaw with Claude Code, Aug 2026).
+        dispAx.YDir     = 'normal';
+        lsBinaryAx.YDir = 'normal';
         renderLsWindow(s);
 
         % ---- pre-create the three live trace lines (NaN Y, full X) ---------
@@ -4468,6 +4577,8 @@ setappdata(fig, 'state', state);
                                                % snapshot (Kira Shaw with
                                                % Claude Code, Aug 2026)
                 renderLsFrame(s);
+                dispAx.YDir     = 'normal';   % live-run direction override - see the
+                lsBinaryAx.YDir = 'normal';   % note by the reset block above cb_lsGo's loop
                 renderLsWindow(s);
 
                 % RHS: grow the three traces with values computed so far
@@ -4614,6 +4725,24 @@ setappdata(fig, 'state', state);
         end
         title(lsVelAx, {'Red Blood Cell Velocity', statsStr(vel_display)});
         drawnow;
+
+        % Slant description + correction recommendation, shown alongside the
+        % Direction readout - confirmed empirically against this exact
+        % Radon pipeline (higher-LHS/lower-RHS slant <-> positive theta/
+        % vel_app <-> this 'retrograde' branch), then set by Kira Shaw's
+        % own rule from direct RBC-slant observation: correction
+        % recommended when the slant is higher-LHS/lower-RHS (Aug 2026).
+        switch scan_dir
+            case 'retrograde'
+                corrNote = [char(8600) ' higher-LHS, lower-RHS - Vscan correction ' ...
+                    'RECOMMENDED (Chaigneau & Charpak, 2022)'];
+            case 'anterograde'
+                corrNote = [char(8599) ' lower-LHS, higher-RHS - Vscan correction NOT recommended'];
+            otherwise
+                corrNote = 'direction undetermined - correction not meaningful here';
+        end
+        lblLsAngleRight.Text    = sprintf('Direction: %s scan   %s', scan_dir, corrNote);
+        lblLsAngleRight.Visible = 'on';
 
         btnExportFig.Enable = 'on';
         btnExport.Enable    = 'on';
