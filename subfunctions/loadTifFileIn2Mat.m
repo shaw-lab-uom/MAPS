@@ -37,6 +37,12 @@ loadedTif = zeros(num_frames,width,height); %vessel channel
 % printing it again to the command window was just noise)
 
 % open the file once and read directories in sequence (see speed note above)
+% Suppress harmless libtiff warnings (e.g. unknown tags 50838/50839 from
+% Adobe XMP / OME metadata). warning('off','all') is used rather than a
+% specific ID because the ID varies across MATLAB versions; warnings are
+% restored via onCleanup so an error inside the loop still restores them.
+prevWarn   = warning('off', 'all');
+restoreWarn = onCleanup(@() warning(prevWarn)); %#ok<NASGU>
 t = Tiff(tifLoc, 'r');
 cleanupObj = onCleanup(@() close(t)); %#ok<NASGU> % closes file even if we error out
 for k = 1:num_frames % loop through frames and load each one

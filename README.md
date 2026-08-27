@@ -11,16 +11,16 @@ See `example_MAPS_GUI_4x_small.mp4` for a video of the GUI in use (recorded live
 - [Requirements](#requirements)
 - [Getting started](#getting-started)
 - [xyDiam — vessel diameter over time](#xydiam--vessel-diameter-over-time)
+- [linescan — RBC velocity, haematocrit & flux from a repeated-line scan](#linescan--rbc-velocity-haematocrit--flux-from-a-repeated-line-scan)
 - [zstack — vascular density from a z-stack](#zstack--vascular-density-from-a-z-stack)
-- [linescan — not yet implemented](#linescan--not-yet-implemented)
 - [Credits](#credits)
 - [License](#license)
 
 ## Requirements
 
 - MATLAB, R2023b or later recommended. `readstruct` (used for the `.xml` auto-detect path in both analysis types) needs R2020b+; `xline` (used in the zstack export figure) needs R2018b+.
-- Image Processing Toolbox — `bwmorph`, `imfill`, `bwareaopen`, `poly2mask`, `bwboundaries`, `drawpolygon`, `roipoly` (xyDiam); `bwskel`, `bwdist`, `imresize3`, `imgaussfilt3`, `graythresh` (zstack).
-- No Statistics and Machine Learning Toolbox needed — the zstack percentile calculations use a small local implementation instead.
+- Image Processing Toolbox — `bwmorph`, `imfill`, `bwareaopen`, `poly2mask`, `bwboundaries`, `drawpolygon`, `roipoly` (xyDiam); `bwskel`, `bwdist`, `imresize3`, `imgaussfilt3`, `graythresh` (zstack); `radon`, `drawline` (linescan).
+- No Statistics and Machine Learning Toolbox needed — the zstack percentile calculations use a small local implementation instead, and linescan's mean/SD/range/percentile figures are all base-MATLAB (`mean`/`std`/`min`/`max` with `'omitnan'`).
 
 ## Getting started
 
@@ -40,7 +40,11 @@ Pixel size, frame rate, and (for zstack) z-step are auto-detected where possible
 
 Neither the `.ini` nor `.xml` step assumes a filename — both are found by extension, so renaming or relocating the accompanying metadata file doesn't break detection. Anything not found is left blank for manual entry in the Parameters panel.
 
+Because that search is by extension across the whole experiment folder rather than by matching filename, **keep each TIF and its accompanying metadata file together in their own subfolder**, without any other TIFs or `.ini`/`.xml` files alongside them — with more than one candidate metadata file in scope, the GUI has no reliable way to tell which one actually belongs to the TIF you loaded, and could silently pick up the wrong pixel size/frame rate/z-step.
+
 No data of your own to hand? `exampleData4Testing/` has a sample TIF plus its accompanying `.xml` for each analysis type — `xyDiam/vessel.tif` and `ZStack/Stack.tif` — so you can try either pipeline, including auto pixel-size/frame-rate/z-step detection, out of the box.
+
+The red **Reset** button in the header (next to the credit line) discards all loaded/analysed data across all three analysis types and reopens a fresh instance — the fastest way back to a clean starting point before processing the next TIF, without closing and relaunching MATLAB by hand. It asks for confirmation first, since it can't be undone.
 
 ## xyDiam — vessel diameter over time
 
@@ -65,6 +69,52 @@ Given a time-lapse TIF of a vessel (single channel, one frame per timepoint), me
 3. Check/enter **Pixel size (microns)** and **Frame rate (Hz)** in the Parameters panel (auto-filled where possible — see [Getting started](#getting-started)).
 4. **GO** to run the analysis.
 5. **Export data** / **Export figure** once it completes.
+
+## linescan — RBC velocity, haematocrit & flux from a repeated-line scan
+
+Given a repeated-line ("RBCV.tif"-style) two-photon scan — the same line traced over and over along a vessel's centreline, so each row of the TIF is one more sweep of it — measures red blood cell (RBC) velocity, haematocrit, and flux in a sliding window along the recording, using the space–time streak pattern RBCs leave behind as they pass through the scanned line.
+
+**What it does:**
+1. Loads the TIF as a space–time image: rows = successive scan lines (time), columns = position along the scanned line (space).
+2. Binarises it (adjustable threshold) to separate RBCs (dark, low-signal — they occlude the labelled plasma) from plasma (bright).
+3. Steps a sliding window (size in ms, always kept a multiple of 4 lines; step = ¼ window) along the recording. In each window:
+   - **Angle → velocity**: a two-pass Radon transform (coarse over 0–179°, then a fine ±3° pass at 0.1° steps around the coarse peak) finds the streak angle θ, exactly the method in [Drew et al. 2010](#references). Apparent velocity is `V_app = (pixel size / line time) · cot(θ)` — using the *per-pixel* spatial size (not the scanned line's total width), so the result comes out directly in mm/s.
+   - **Haematocrit**: percentage of binarised-dark pixels in the window (RBCs occlude the plasma label, so % dark ≈ % of the vessel cross-section occupied by RBCs at that moment).
+   - **RBC flux**: number of RBC crossings per second, counted as transitions (dark↔light) along the window's centre spatial pixel over time — each RBC passage is one dark run, i.e. two transitions.
+4. Displays all three live as they're computed — the raw/binary panels and small window preview step through the data in sync with the sliding window, and the three result traces grow window-by-window (mirrors the xyDiam live view) — so you can watch the full run rather than wait for a static end result.
+5. Displays each trace with a 2-line title: what it is, then that trace's mean/SD/range across the whole recording (computed from the raw per-window values, not the smoothed display line below).
+
+**Features:**
+- **Live per-window QC before committing to a full run**: click **Check line angle** on the current sliding window to see its direction (anterograde/retrograde/uncertain) and signal quality (SNR) without running the whole recording; **Detect individual RBCs** overlays a count for just that window, from dark-run detection at *both* the left and right edges of the window (averaged) — using both edges rather than one catches streaks that are faint or exit the window before reaching a single edge, and separates closely-spaced RBCs that blur together on one side but not the other. Both update live as you move the frame/window sliders/slider.
+- **Optional width-only crop**: draw a line across the width on the raw display, double-click to confirm; only the *spatial* extent is cropped (never height/time, which would corrupt the timing calculation). Re-clickable to redraw before confirming, or to reset and crop again afterwards. Applied across the whole recording, and re-binarising is required afterwards.
+- **Scan-velocity (Vscan) correction** — optional, off by default (see [Corrections applied](#corrections-applied) below).
+- **Live traces, colour-coded**: RBC velocity (red), haematocrit (purple), RBC flux (green) — each panel filling the available space rather than a fixed small tile.
+- **Export figure** pops the three result graphs out into a standalone, savable figure (PNG/PDF/FIG) — same pattern as the xyDiam/zstack export.
+
+**Corrections applied:**
+
+*Apparent-to-true velocity.* The Radon-transform angle gives an *apparent* velocity, which only equals the RBC's true velocity if the scan itself is effectively instantaneous. In reality, the beam takes a finite time to sweep across the line — the **scan velocity**, `Vscan = (line width) / (line time)` — and if the RBC's own motion is a non-trivial fraction of that, the streak angle is measurably distorted by the scan's own sweep, not just the RBC's motion. Correcting for it (checkbox: **Apply scan-velocity correction (Vscan)**) uses:
+- Retrograde (RBC moving the same direction as the scan sweep): `V_true = V_app · Vscan / (Vscan − V_app)`
+- Anterograde (opposite direction): `V_true = V_app · Vscan / (Vscan + V_app)`
+
+This is the classic correction from the two-photon line-scan RBC-velocimetry literature pioneered by the Kleinfeld and Charpak groups (see [References](#references)) — named here for the equation rather than a person, since it appears under different names in different papers. It's **off by default**: the retrograde case is only well-conditioned when `Vscan` is comfortably larger than the true velocity (the denominator approaches zero, and the formula becomes unrecoverable, as `V_app → Vscan`), so whether it's appropriate depends on your scan settings relative to the flow speeds you're imaging — it isn't assumed to apply universally. Ticking it shows *three* velocity traces for direct comparison: the raw apparent velocity (red, always shown, uncorrected), the corrected velocity without the validity filter applied (yellow — shows what the correction does before implausible windows are removed), and the corrected velocity with that filter applied (blue — the value actually reported/exported). If the filter removes most of the run (`Vscan` too close to the measured velocity for most windows), the reported value automatically falls back to the uncorrected apparent velocity rather than reporting a mostly-empty result, and this is flagged in the processing log.
+
+*Physical floors.* Velocity at or below the noise floor (< 0.1 mm/s, including any negative value once a scan direction is established — a corrected velocity in the established flow direction can't be negative) is treated as unreliable and excluded (`NaN`) rather than plotted or averaged.
+
+*Display smoothing.* All three live/exported traces show a 5-window moving mean (NaN-aware, so a run of excluded windows doesn't spread into its neighbours) — linescan data is noisy window-to-window. The underlying stored/exported values are always the raw, unsmoothed per-window numbers; only the line drawn on screen is smoothed.
+
+**Workflow:**
+1. **Analysis type** → `linescan`, then **Load Data** → select a repeated-line-scan TIF.
+2. Check/enter **Pixel size (microns)** and **Frame rate (Hz)** in the Parameters panel (auto-filled where possible — see [Getting started](#getting-started)); set **Window (ms)** if the default doesn't suit (must be divisible by 4 — an invalid entry is flagged in red and reverts).
+3. In **Preprocessing**: optionally **Crop (width)**, then **Binarise** (adjust the threshold slider as needed). Use **Check line angle** / **Detect individual RBCs** on a window or two first to sanity-check signal quality before committing to a full run.
+4. Tick **Apply scan-velocity correction (Vscan)** if you want it (off by default — see [Corrections applied](#corrections-applied)).
+5. **Run Linescan Analysis** — watch it progress live, or wait for it to finish.
+6. **Export figure** once it completes.
+
+**References:**
+- Drew PJ, Blinder P, Cauwenberghs G, Shih AY, Kleinfeld D (2010). [Rapid determination of particle velocity from space-time images using the Radon transform](https://link.springer.com/article/10.1007/s10827-009-0159-1). *Journal of Computational Neuroscience* 29(1-2):5-11. — the angle-detection method used here.
+- Chaigneau E, Oheim M, Audinat E, Charpak S (2003). [Two-photon imaging of capillary blood flow in olfactory bulb glomeruli](https://www.pnas.org/doi/10.1073/pnas.2133652100). *PNAS* 100(22):13081-13086. — foundational two-photon line-scan RBC-velocity methodology, source of the scan-velocity correction's naming above.
+- Chaigneau E, Charpak S (2022). [Measurement of Blood Velocity With Laser Scanning Microscopy: Modeling and Comparison of Line-Scan Image-Processing Algorithms](https://www.frontiersin.org/articles/10.3389/fphys.2022.848002/full). *Frontiers in Physiology* 13:848002. — a modern, comprehensive comparison of line-scan velocity algorithms and corrections, including the apparent-vs-true/scan-velocity relationship above.
 
 ## zstack — vascular density from a z-stack
 
@@ -99,13 +149,11 @@ Given a z-stack TIF of the vasculature, thresholds and skeletonises it in 3D to 
 4. **Process Stack** — if pixel size/z-step are still missing, a dialog prompts for them rather than failing partway through.
 5. **Export data** / **Export figure** once it completes. Export figure asks which tissue volume definition ("Full tissue" or "Boundary-restricted") to build the figure around, only when Vessel boundary was ticked for that run — see Features above.
 
-## linescan — not yet implemented
-
-Scaffolded in the **Analysis type** dropdown for a future analysis mode, but not yet built.
-
 ## Credits
 
-Developed by [Kira Shaw](mailto:kira.shaw@manchester.ac.uk), University of Manchester. GUI built with [Claude Code](https://claude.com/claude-code) assistance.
+Developed by [Kira Shaw](mailto:kira.shaw@manchester.ac.uk) (University of Manchester) and Catherine N Hall. GUI built with [Claude Code](https://claude.com/claude-code) assistance.
+
+The underlying analysis methods (vessel diameter via FWHM, vascular density/morphology from a skeletonised z-stack, and the linescan velocity/haematocrit/flux methods above) were originally developed in Catherine Hall's lab group, prior to and independent of this GUI. They were used, for example, in Shaw K, Bell L, Boyd K, Grijseels DM, Clarke D, Bonnar O, Crombag HS, Hall CN (2021). [Neurovascular coupling and oxygenation are decreased in hippocampus compared to neocortex because of microvascular differences](https://www.nature.com/articles/s41467-021-23508-y). *Nature Communications* 12:3190. The original (non-GUI) analysis scripts are available separately at [shaw-lab-uom/original-vascular-analysis-scripts](https://github.com/shaw-lab-uom/original-vascular-analysis-scripts); MAPS is a GUI-driven adaptation of that underlying analysis, built with Claude Code assistance.
 
 `subfunctions/ini2struct.m` is a third-party utility by Andriy Nych, included as-is (see its header) — it is not covered by this repo's license below.
 

@@ -42,6 +42,16 @@ F = @(sz) max(7, round(sz * SC));                % scale a FontSize (floor 7pt)
 % unscaled 3 for height, so it matches what the slider forces anyway and
 % the warning never fires. (Written by Kira Shaw with Claude Code, Aug 2026)
 Pslider = @(x,y,w) [round([x y w] * SC), 3];
+% Vertical uislider has the exact same quirk on its OTHER dimension: its
+% InnerPosition WIDTH is hard-fixed at 3 px (confirmed empirically - a
+% vertical uislider's actual width stays 3 regardless of what's requested,
+% same underlying mechanism as Pslider's height fix above), so a vertical
+% slider whose Position asks for any other width warns "The width of this
+% component cannot be changed" every time - this is what lsWinVertSlider
+% was doing on creation and on every switch into linescan mode. PsliderV
+% scales x/y/h as usual but always passes the unscaled 3 for width (Written
+% by Kira Shaw with Claude Code, Aug 2026).
+PsliderV = @(x,y,h) [round(x*SC), round(y*SC), 3, round(h*SC)];
 
 figW = round(designW * SC);
 figH = round(designH * SC);
@@ -88,6 +98,18 @@ uilabel(fig, ...
     'FontSize',            F(14), 'FontColor', [0.40 0.40 0.40], ...
     'HorizontalAlignment', 'right');
 
+% Reset button - sits in the same gap the comment above notes (title box
+% ends at 785, credit label starts at 922), just to the left of the credit
+% line. Confirms before acting since it discards all loaded/analysed data
+% (Kira Shaw with Claude Code, Aug 2026).
+uibutton(fig, ...
+    'Position',        P(795,814,115,32), ...
+    'Text',            'Reset', ...
+    'FontSize',        F(13), 'FontWeight', 'bold', ...
+    'BackgroundColor', [0.75 0.05 0.05], ...
+    'FontColor',       [1 1 1], ...
+    'ButtonPushedFcn', @(~,~) cb_reset());
+
 % thin separator line below header
 uipanel(fig, 'Position', P(0,782,1430,2), 'BackgroundColor', [0.7 0.7 0.75], ...
     'BorderType', 'none');
@@ -115,7 +137,7 @@ uilabel(pnlSetup, 'Position', P(10,44,105,26), 'Text', 'Analysis type:', ...
     'FontSize', F(13), 'FontWeight', 'bold', 'FontColor', [0.20 0.20 0.20]);
 ddAnalysis = uidropdown(pnlSetup, ...
     'Position', P(120,44,LW-140,26), ...
-    'Items',    {'xyDiam', 'zstack', 'linescan'}, ...
+    'Items',    {'xyDiam', 'linescan', 'zstack'}, ...
     'Value',    'xyDiam', 'FontSize', F(13), ...
     'ValueChangedFcn', @(~,~) cb_analysisChanged());
 
@@ -165,6 +187,11 @@ dispAx = uiaxes(fig, 'Position', P(LX,320,LW,361));
 dispAx.XTick = []; dispAx.YTick = [];
 dispAx.Box   = 'off';
 dispAx.Color = [0.88 0.88 0.90];
+% Axes toolbar (pan/zoom/datacursor/home icons) sits right over the linescan
+% mode's header labels above this axes - not needed here (navigation is via
+% the sliders/buttons), so switch it off rather than let it overlap text
+% (Kira Shaw with Claude Code, Aug 2026).
+dispAx.Toolbar.Visible = 'off';
 dispAx.Title.String = 'Pending vessel display';
 dispAx.Title.Color  = [0.45 0.45 0.45];
 axis(dispAx, 'equal');
@@ -197,7 +224,7 @@ lblZFrame = uilabel(fig, ...
 % treatment, just for consistency between the two modes.
 pnlProcOptions = uipanel(fig, ...
     'Position',        P(LX,212,LW,96), ...
-    'Title',           'Processing options', ...
+    'Title',           'Preprocessing', ...
     'FontWeight',      'bold', ...
     'BackgroundColor', [0.97 0.97 0.98]);
 
@@ -349,6 +376,167 @@ zstackLeftH = [pnlPreprocessing, chkAutoThresh, ddThreshMethod, chkManualThresh,
     lblPruneLen, efPruneLen, btnRangeStart, btnRangeEnd, ...
     lblSlantHeading, chkSlantCorrect, chkBoundaryRestrict];
 
+% =============================================================================
+%  LINESCAN LEFT-PANEL CONTROLS  (all Visible off; shown by cb_analysisChanged)
+% =============================================================================
+
+% NOTE: the old static "crop RBCV.tif before loading" warning label has
+% been replaced by an interactive width-crop step in the Preprocessing
+% panel below (btnLsCrop) - see "Row 3: Crop" (Kira Shaw with Claude
+% Code, Aug 2026).
+
+% Frame slider + counter (sits in the gap between dispAx and lsWinAx)
+lblLsFrameHdr = uilabel(fig, ...
+    'Position',  P(LX,417,70,14), ...
+    'Text', 'Frame:', 'FontSize', F(9), ...
+    'FontColor', [0.35 0.35 0.35], 'Visible', 'off');
+lblLsFrame = uilabel(fig, ...
+    'Position',            P(LX+72,417,90,14), ...
+    'Text',                '1 / 1', ...
+    'FontSize',            F(9), 'FontColor', [0.35 0.35 0.35], ...
+    'HorizontalAlignment', 'left', 'Visible', 'off');
+lsFrameSlider = uislider(fig, ...
+    'Position',         Pslider(LX+170,420,LW-175), ...
+    'Limits',           [1 2], 'Value', 1, 'Visible', 'off', ...
+    'ValueChangingFcn', @(~,ev) cb_lsFrameSlider(ev.Value, true), ...
+    'ValueChangedFcn',  @(src,~) cb_lsFrameSlider(src.Value, false));
+
+% Sliding-window display — shows the current 40ms (or user-set) window
+% (y 258->272: see lsWinAx above - reclaims clearance from the Preprocessing
+% panel below, which had shrunk to ~4px)
+lblLsWinHdr = uilabel(fig, ...
+    'Position',  P(LX,272,150,14), ...
+    'Text', 'Sliding window:', 'FontSize', F(9), ...
+    'FontWeight', 'bold', 'FontColor', [0.25 0.25 0.25], 'Visible', 'off');
+lblLsWin = uilabel(fig, ...
+    'Position',            P(LX+155,272,120,14), ...
+    'Text',                'Win 1 / 1', ...
+    'FontSize',            F(9), 'FontColor', [0.45 0.45 0.45], ...
+    'HorizontalAlignment', 'left', 'Visible', 'off');
+% Shifted up (y 275->289) and shortened (h 130->110) to open a proper gap
+% below the "Sliding window" header labels and the Preprocessing panel's
+% top edge, which had shrunk to ~4px when that panel grew a 4th row -
+% (Kira Shaw with Claude Code, Aug 2026).
+lsWinAx = uiaxes(fig, 'Position', P(LX,289,LW,110), 'Visible', 'off');
+lsWinAx.XTick = []; lsWinAx.YTick = [];
+lsWinAx.Color  = [0.10 0.10 0.10];
+lsWinAx.Toolbar.Visible = 'off';   % see dispAx above
+lsWinAx.Title.String = 'Sliding window (80 ms)';
+lsWinAx.Title.FontSize = F(9);
+xlabel(lsWinAx, 'Time (scan lines)');  ylabel(lsWinAx, 'Space');
+lsWinSlider = uislider(fig, ...
+    'Position',         Pslider(LX,262,LW-5), ...
+    'Limits',           [1 2], 'Value', 1, 'Visible', 'off', ...
+    'ValueChangingFcn', @(~,ev) cb_lsWinSlider(ev.Value, true), ...
+    'ValueChangedFcn',  @(src,~) cb_lsWinSlider(src.Value, false));
+
+% Vertical per-frame window slider — sits to the left of the raw/binary panels
+% in linescan mode; positioned by cb_analysisChanged. Slider top = window at
+% top of frame; slider bottom = window at bottom of frame (value is inverted).
+% Labelled "Window" (lblLsWinVertHdr, positioned by cb_analysisChanged) - it
+% had no label of its own before, sitting right beside the unrelated "Frame:"
+% text for the frame slider below, which read as if IT were labelled "frame"
+% (Written by Kira Shaw with Claude Code, Aug 2026).
+lblLsWinVertHdr = uilabel(fig, ...
+    'Position',  P(LX,676,60,12), ...
+    'Text', 'Window', 'FontSize', F(8), ...
+    'FontColor', [0.35 0.35 0.35], 'Visible', 'off');
+% Live readout of the current line-within-frame value the slider points at
+% (1 at top, maxLr at bottom - matches the slider's own top=1/bottom=max
+% layout) - kept updated alongside the slider in renderLsFrame (Kira Shaw
+% with Claude Code, Aug 2026).
+lblLsWinVertVal = uilabel(fig, ...
+    'Position',  P(LX,662,60,12), ...
+    'Text', '', 'FontSize', F(8), ...
+    'FontColor', [0.35 0.35 0.35], 'Visible', 'off');
+lsWinVertSlider = uislider(fig, ...
+    'Orientation',      'vertical', ...
+    'Position',         PsliderV(LX, 435, 240), ...
+    'Limits',           [1 2], 'Value', 2, 'Visible', 'off', ...
+    'MajorTicks',       [], 'MinorTicks', [], ...
+    'ValueChangingFcn', @(~,ev) cb_lsWinVertSlider(ev.Value, true), ...
+    'ValueChangedFcn',  @(src,~) cb_lsWinVertSlider(src.Value, false));
+
+% Processing options panel (linescan)
+% Grown to 4 rows (was 3/92px tall) to fit the new Crop row - order is
+% Crop, Binarise, Check line angle, Detect RBCs: Crop first since it's
+% optional but (if used) invalidates everything below it; Binarise next
+% since RBC detection depends on it (Written by Kira Shaw with Claude
+% Code, Aug 2026).
+pnlLsProc = uipanel(fig, ...
+    'Position',        P(LX,136,LW,118), ...
+    'Title',           'Preprocessing', ...
+    'FontWeight',      'bold', ...
+    'BackgroundColor', [0.97 0.97 0.98], ...
+    'Visible',         'off');
+
+LSFS = F(11);
+
+% Row 1: Crop (width-only, optional) - first/topmost since it's the one
+% step that (if used) invalidates everything below it; replaces the old
+% static warning label about pre-cropping RBCV.tif before loading. Draw a
+% line across the width on the raw display (dispAx), double-click to
+% confirm; click again to redraw before confirming, or to reset+redraw
+% after applying (Kira Shaw with Claude Code, Aug 2026).
+% Rows nudged down 8px from the panel top (88/62/36 -> 80/56/32) to give
+% the panel's own title bar ("Processing options") proper clearance - the
+% previous 8px gap wasn't enough and "Crop"/"Not cropped" were overlapping
+% the title text (Kira Shaw with Claude Code, Aug 2026).
+btnLsCrop = uibutton(pnlLsProc, ...
+    'Position',        P(8,80,90,22), ...
+    'Text',            'Crop (width)', ...
+    'FontSize',        LSFS, 'Enable', 'off', ...
+    'ButtonPushedFcn', @(~,~) cb_lsCropToggle());
+lblLsCropStatus = uilabel(pnlLsProc, 'Position', P(105,80,LW-120,22), ...
+    'Text', 'Not cropped', 'FontSize', LSFS, 'FontColor', [0.45 0.45 0.45]);
+
+% Row 2: Binarise button + threshold slider
+btnLsBinarise = uibutton(pnlLsProc, ...
+    'Position',        P(8,56,90,22), ...
+    'Text',            'Binarise', ...
+    'FontSize',        LSFS, 'Enable', 'off', ...
+    'ButtonPushedFcn', @(~,~) cb_lsBinarise());
+lblLsThresh = uilabel(pnlLsProc, 'Position', P(105,56,55,22), ...
+    'Text', 'Thresh:', 'FontSize', LSFS, 'FontColor', [0.45 0.45 0.45]);
+sldLsThresh = uislider(pnlLsProc, ...
+    'Position',         Pslider(162,62,LW-178), ...
+    'Limits',           [0 1], 'Value', 0.5, 'Enable', 'off', ...
+    'ValueChangingFcn', @(~,ev) cb_lsThreshSlider(ev.Value, true), ...
+    'ValueChangedFcn',  @(src,~) cb_lsThreshSlider(src.Value, false));
+
+% Row 3: Check line angle button + result label
+btnLsCheckAngle = uibutton(pnlLsProc, ...
+    'Position',        P(8,32,140,22), ...
+    'Text',            'Check line angle', ...
+    'FontSize',        LSFS, 'Enable', 'off', ...
+    'ButtonPushedFcn', @(~,~) cb_lsCheckAngle());
+lblLsAngleResult = uilabel(pnlLsProc, 'Position', P(155,32,LW-170,22), ...
+    'Text', '', 'FontSize', LSFS, 'FontColor', [0.20 0.20 0.20]);
+
+% Row 4: Detect individual RBCs - now a button styled like the rest of
+% this panel (was a checkbox), so a status label carries the on/off state
+% (Kira Shaw with Claude Code, Aug 2026).
+btnLsRBC = uibutton(pnlLsProc, ...
+    'Position',        P(8,8,140,22), ...
+    'Text',            'Detect individual RBCs', ...
+    'FontSize',        LSFS, 'Enable', 'off', ...
+    'ButtonPushedFcn', @(~,~) cb_lsRBCToggle());
+lblLsRBCStatus = uilabel(pnlLsProc, 'Position', P(155,8,LW-170,22), ...
+    'Text', 'Off', 'FontSize', LSFS, 'FontColor', [0.45 0.45 0.45]);
+
+% NOTE: lblLsWinSzParam and efLsWinSz are created in the Parameters panel
+% below, so linescanLeftH is completed there (search "linescanLeftH =").
+% lsWinSlider (paged window-stepping) deliberately left out here and kept
+% permanently hidden: redundant now that the frame slider + lsWinVertSlider
+% ("Window") together reach any window directly, and freeing its row gives
+% the sliding-window preview a bit more breathing room (Written by Kira
+% Shaw with Claude Code, Aug 2026).
+linescanLeftH_part1 = [lblLsFrameHdr, lblLsFrame, lsFrameSlider, ...
+    lblLsWinHdr, lblLsWin, lsWinAx, lblLsWinVertHdr, lblLsWinVertVal, lsWinVertSlider, ...
+    pnlLsProc, btnLsCheckAngle, lblLsAngleResult, btnLsBinarise, ...
+    lblLsThresh, sldLsThresh, btnLsCrop, lblLsCropStatus, ...
+    btnLsRBC, lblLsRBCStatus];
+
 % ---- Parameters panel -------------------------------------------------------
 % Shrunk to 80px tall (was 88px) - just tighter gaps/padding, the fields
 % themselves are unchanged - to give the Preprocessing panel above the
@@ -372,17 +560,53 @@ efZstep = uieditfield(pnl, 'text', ...
     'Position', P(122,42,80,18), 'Value', '', 'FontSize', F(10), ...
     'Placeholder', 'blank = n/a', 'Visible', 'off');
 
+% Linescan: lines per second (auto-computed, read-only display)
+lblLps = uilabel(pnl, 'Position', P(10,42,110,18), ...
+    'Text', 'Lines per second:', 'FontSize', F(10), 'Visible', 'off');
+efLps = uieditfield(pnl, 'text', ...
+    'Position', P(122,42,80,18), 'Value', '', 'FontSize', F(10), ...
+    'Editable', false, 'Visible', 'off');
+
+% Linescan: window size — right side of same row as Lines per second
+lblLsWinSzParam = uilabel(pnl, 'Position', P(212,42,72,18), ...
+    'Text', 'Window (ms):', 'FontSize', F(10), 'Visible', 'off');
+efLsWinSz = uieditfield(pnl, 'numeric', ...
+    'Position',        P(286,42,58,18), ...
+    'Value',           40, 'Limits', [4 10000], 'FontSize', F(10), ...
+    'Visible',         'off', ...
+    'ValueChangedFcn', @(~,~) cb_lsWinSzChanged());
+
 uilabel(pnl, 'Position', P(10,22,110,18), ...
     'Text', 'Pixel size (microns):', 'FontSize', F(10));
 efPxsz = uieditfield(pnl, 'text', ...
     'Position', P(122,22,80,18), 'Value', '', 'FontSize', F(10), ...
     'Placeholder', 'blank = pixels');
 
+% Linescan: scan-velocity (Vscan) correction, named for the equation it
+% applies rather than an author - see README for the full derivation and
+% references. OFF by default ("parked"), opt-in: its physical validity for
+% this acquisition hasn't been independently confirmed (unlike the
+% underlying apparent-velocity formula itself, which now has been - see
+% cb_lsGo), and it can NaN out most of the trace when the true velocity
+% approaches Vscan, so it's an explicit choice rather than always-on
+% (variable name kept as chkLsCharpak internally for continuity with
+% earlier discussion of this feature - Kira Shaw with Claude Code, Aug 2026).
+chkLsCharpak = uicheckbox(pnl, ...
+    'Position', P(212,22,LW-222,18), ...
+    'Text',     'Apply scan-velocity correction (Vscan)', ...
+    'Value',    false, 'FontSize', F(9), 'Visible', 'off', ...
+    'Tooltip',  ['Corrects apparent velocity for the finite line-scan sweep ' ...
+        'rate (Vscan) - see README. Can wipe out most of the trace if ' ...
+        'unstable for this Vscan (see Processing updates)']);
+
 uilabel(pnl, 'Position', P(10,2,110,18), ...
     'Text', 'Frame rate (Hz):', 'FontSize', F(10));
 efFPS = uieditfield(pnl, 'text', ...
     'Position', P(122,2,80,18), 'Value', '', 'FontSize', F(10), ...
     'Placeholder', 'blank = frames');
+
+% Complete linescanLeftH now that lblLsWinSzParam and efLsWinSz exist
+linescanLeftH = [linescanLeftH_part1, lblLsWinSzParam, efLsWinSz, chkLsCharpak];
 
 % ---- GO button (xyDiam) ------------------------------------------------------
 btnGo = uibutton(fig, ...
@@ -404,6 +628,16 @@ btnZAnalyze = uibutton(fig, ...
     'Enable',          'off', 'Visible', 'off', ...
     'ButtonPushedFcn', @(~,~) cb_zAnalyze());
 
+% ---- linescan equivalent of GO ------------------------------------------------
+btnLsGo = uibutton(fig, ...
+    'Position',        P(LX,14,LW,33), ...
+    'Text',            'Run Linescan Analysis', ...
+    'FontSize',        F(14), 'FontWeight', 'bold', ...
+    'BackgroundColor', [0.55 0.15 0.55], ...
+    'FontColor',       [1 1 1], ...
+    'Enable',          'off', 'Visible', 'off', ...
+    'ButtonPushedFcn', @(~,~) cb_lsGo());
+
 % =============================================================================
 %  RIGHT PANEL  (x = 435, width = 985)
 % =============================================================================
@@ -418,6 +652,18 @@ txaUpdates = uitextarea(fig, ...
     'Editable', false, ...
     'Value',    'Load data to begin.', ...
     'FontSize', F(11));
+% uitextarea cannot render coloured/bold text, so validation errors (e.g.
+% window size not divisible by 4) show in this overlay label instead -
+% same position/size as txaUpdates, hidden except while an error is
+% active. postUpdate() hides it again on the next normal message
+% (Kira Shaw with Claude Code, Aug 2026).
+lblUpdatesError = uilabel(fig, ...
+    'Position',        P(RX,730,RW,30), ...
+    'Text',            '', ...
+    'FontSize',         F(11), 'FontWeight', 'bold', ...
+    'FontColor',        [0.75 0.05 0.05], ...
+    'BackgroundColor',  [1 1 1], ...
+    'Visible',          'off');
 
 % ---- Diameter heatmap axes (xyDiam) -------------------------------------------
 lblHeatmap = uilabel(fig, 'Position', P(RX,708,350,18), ...
@@ -580,10 +826,81 @@ zstackRightH   = [lblSegments, tblSegments];
 zstackResultsH = [pnlDensity, axSkel, axDist, axDiamDepth, axLengthDepth, ...
     axDistHist, axTortDepth];
 
-% ---- Export buttons (data and figure, side by side) -------------------------
+% =============================================================================
+%  LINESCAN RIGHT PANEL
+% =============================================================================
+% Upper half: binary linescan image (after Binarise)
+lblLsBinaryHdr = uilabel(fig, 'Position', P(RX,718,500,18), ...
+    'Text', 'Binary linescan  (current frame — after Binarise)', ...
+    'FontSize', F(10), 'FontWeight', 'bold', 'FontColor', [0.25 0.25 0.25], ...
+    'Visible', 'off');
+lsBinaryAx = uiaxes(fig, 'Position', P(RX,528,RW,186), 'Visible', 'off');
+lsBinaryAx.XTick = []; lsBinaryAx.YTick = [];
+lsBinaryAx.Color = [0.10 0.10 0.10];
+lsBinaryAx.Toolbar.Visible = 'off';   % see dispAx above
+colormap(lsBinaryAx, 'gray');
+lsBinaryAx.Title.String = 'Binary (not yet computed)';
+lsBinaryAx.Title.FontSize = F(9);
+% Matches dispAx's (raw) convention set in renderLsFrame - kept in sync
+% here too, and re-applied on every entry to linescan mode (see
+% cb_analysisChanged), so raw and binary never show mismatched axis
+% labels regardless of load state (Written by Kira Shaw with Claude
+% Code, Aug 2026).
+xlabel(lsBinaryAx, 'Spatial pixel');  ylabel(lsBinaryAx, 'Scan line (time ↓)');
+
+% Angle-check result overlay text (shown after Check line angle)
+lblLsAngleRight = uilabel(fig, 'Position', P(RX,702,RW,20), ...
+    'Text', '', 'FontSize', F(11), 'FontWeight', 'bold', ...
+    'FontColor', [0.15 0.35 0.65], 'Visible', 'off');
+
+% RBC detection count — large readable label in right panel (linescan mode only)
+lblLsRBCResult = uilabel(fig, 'Position', P(RX,672,600,28), ...
+    'Text', '', 'FontSize', F(15), 'FontWeight', 'bold', ...
+    'FontColor', [0.08 0.45 0.08], 'Visible', 'off', ...
+    'HorizontalAlignment', 'left');
+
+% Lower half: three result traces, stacked in rows (was side-by-side
+% columns) - RBCV top, Haematocrit middle, RBC flux bottom, full width.
+% Grown to fill the space up to the scan-info/RBC-count labels above (was
+% capped at a fixed 136px/row with a redundant "Analysis results" header
+% eating another row's worth of blank space above them) - each plot's own
+% title already says what it is, so the header is dropped rather than
+% fought for room (Kira Shaw with Claude Code, Aug 2026).
+lsResH   = 190;  % each row's height
+lsResGap = 12;
+lsRowFlux = 55;                              % bottom row
+lsRowHct  = lsRowFlux + lsResH + lsResGap;   % middle row
+lsRowVel  = lsRowHct  + lsResH + lsResGap;   % top row
+
+lsVelAx = uiaxes(fig, 'Position', P(RX,lsRowVel,RW,lsResH), 'Visible', 'off');
+lsVelAx.Color  = [0.97 0.97 0.97];
+lsVelAx.XColor = [0.30 0.30 0.30];
+lsVelAx.YColor = [0.30 0.30 0.30];
+xlabel(lsVelAx, 'Time (s)');  ylabel(lsVelAx, 'Velocity (mm/s)');
+title(lsVelAx, 'Red Blood Cell Velocity');
+
+lsHctAx = uiaxes(fig, 'Position', P(RX,lsRowHct,RW,lsResH), 'Visible', 'off');
+lsHctAx.Color  = [0.97 0.97 0.97];
+lsHctAx.XColor = [0.30 0.30 0.30];
+lsHctAx.YColor = [0.30 0.30 0.30];
+xlabel(lsHctAx, 'Time (s)');  ylabel(lsHctAx, 'RBC density (%)');
+title(lsHctAx, 'Haematocrit');
+
+lsFluxAx = uiaxes(fig, 'Position', P(RX,lsRowFlux,RW,lsResH), 'Visible', 'off');
+lsFluxAx.Color  = [0.97 0.97 0.97];
+lsFluxAx.XColor = [0.30 0.30 0.30];
+lsFluxAx.YColor = [0.30 0.30 0.30];
+xlabel(lsFluxAx, 'Time (s)');  ylabel(lsFluxAx, 'Flux (RBC/s)');
+title(lsFluxAx, 'RBC Flux');
+
+linescanRightH  = [lblLsBinaryHdr, lsBinaryAx, lblLsAngleRight, lblLsRBCResult];
+linescanResultsH = [lsVelAx, lsHctAx, lsFluxAx];
+
+% ---- Export buttons (figure and data, side by side - figure first, per
+% Kira Shaw's request Aug 2026) --------------------------------------------
 btnW2 = floor((RW-10)/2);   % width of each button
 btnExport = uibutton(fig, ...
-    'Position',        P(RX,14,btnW2,33), ...
+    'Position',        P(RX+btnW2+10,14,btnW2,33), ...
     'Text',            'Export data', ...
     'FontSize',        F(13), 'FontWeight', 'bold', ...
     'BackgroundColor', [0.15 0.25 0.68], ...
@@ -592,7 +909,7 @@ btnExport = uibutton(fig, ...
     'ButtonPushedFcn', @(~,~) cb_export());
 
 btnExportFig = uibutton(fig, ...
-    'Position',        P(RX+btnW2+10,14,btnW2,33), ...
+    'Position',        P(RX,14,btnW2,33), ...
     'Text',            'Export figure', ...
     'FontSize',        F(13), 'FontWeight', 'bold', ...
     'BackgroundColor', [0.35 0.20 0.55], ...
@@ -668,6 +985,43 @@ state.zBoundaryMaskVol  = [];   % cached, for the export figure's boundary overl
 state.zSkelVol          = [];   % cached skeleton volume, for the export "stacked slices" view
 state.zDistMapVol       = [];   % cached distance-map volume, same purpose
 state.zAnalysisRun      = false;
+
+% ---- linescan mode state -----------------------------------------------
+state.lsRaw          = [];      % [nF x nSp x nT] raw linescan volume
+state.lsRawLine      = [];      % [nSp x (nT*nF)]: rows=spatial, cols=time
+state.lsBinaryLine   = [];      % [nSp x (nT*nF)] binarised
+state.lsNumFrames    = 0;
+state.lsNumSpatial   = 0;       % spatial pixels (rows of rawLine)
+state.lsNumTime      = 0;       % scan reps per frame (cols per frame)
+state.lsCurrentFrame = 1;
+state.lsCurrentWin   = 1;
+state.lsNumWins      = 0;
+state.lsMspline      = NaN;
+state.lsLps          = NaN;
+state.lsWindowSz_ms  = 80;      % default 80 ms (was 40 ms/Drew paper rec.; changed 2026-08-27)
+state.lsWindowSz_px  = 0;       % windowsize in pixels, divisible by 4
+state.lsStepSz_px    = 0;       % stepsize = windowsize/4
+state.lsThresh       = 0.5;     % binarisation threshold [0,1]
+state.lsVelocity     = [];      % velocity trace (mm/s) - "main" reported value
+state.lsHct          = [];      % haematocrit trace (%)
+state.lsFlux         = [];      % RBC flux trace (RBC/s)
+state.lsTime         = [];      % time vector (s)
+state.lsVelApp       = [];      % raw/uncorrected apparent velocity (mm/s) -
+                                 % kept alongside lsVelocity for Export data
+state.lsApplyCharpak = false;   % was the scan-velocity correction on for this run
+state.lsWinLineStart = [];      % absolute start line index of each window
+state.lsPxsz         = NaN;
+state.lsAngleChecked = false;   % cleared on every slide (frame/window) rather than
+                                 % live-recomputed - re-click "Check line angle" for
+                                 % wherever you land (Kira Shaw with Claude Code, Aug 2026)
+state.lsBinarised    = false;
+state.lsRBCActive    = false;   % individual-RBC detection is now a toggle button,
+                                 % not a checkbox (Kira Shaw with Claude Code, Aug 2026)
+state.lsCropRange    = [];      % [x0 x1] spatial-px crop (in ORIGINAL px coords),
+                                 % or [] = no crop. Applied by regenLsRawLine().
+state.lsCropPhase    = 'idle';  % 'idle' | 'drawing' | 'applied' - crop button state
+state.lsCropROI      = [];      % handle to the in-progress drawline ROI, if any
+state.lsAnalysisRun  = false;
 setappdata(fig, 'state', state);
 
 % =============================================================================
@@ -689,7 +1043,7 @@ setappdata(fig, 'state', state);
             startDir = '';
         end
         [tifName, tifFolder] = uigetfile( ...
-            {'*.tif;*.tiff', 'TIF files (*.tif, *.tiff)'}, ...
+            {'*.tif;*.tiff', 'TIF / OME-TIF files (*.tif, *.tiff, *.ome.tif, *.ome.tiff)'}, ...
             'Select vessel TIF file', startDir);
         if isequal(tifName, 0), return; end
         tifPath = fullfile(tifFolder, tifName);
@@ -786,6 +1140,137 @@ setappdata(fig, 'state', state);
 
             msg = sprintf('Loaded: %s   (%d slices, %d x %d px)', ...
                 tifName, s.zNumFrames, size(rawVess,2), size(rawVess,3));
+        elseif strcmp(ddAnalysis.Value, 'linescan')
+            % ---- linescan setup ---------------------------------------------
+            % loadTifFileIn2Mat returns [nF x width x height] because it
+            % transposes each TIF frame: t.read()'  gives [width x height].
+            % For a ThorLabs linescan RBCV.tif:
+            %   width  (dim 2) = spatial pixels along the scan line (SPACE)
+            %   height (dim 3) = scan-line repetitions per frame   (TIME)
+            nF  = size(rawVess, 1);
+            nSp = size(rawVess, 2);   % spatial pixels (many, portrait Y-axis)
+            nT  = size(rawVess, 3);   % scan reps per frame (few, time X-axis)
+
+            % Build concatenated space-time image [nSp x (nT*nF)]:
+            % rows = spatial pixels (Y), cols = total scan lines / time (X)
+            % matches original extractLinescanVelocity convention:
+            %   rawLine = reshape(A, [width, height*num_images])
+            vol = permute(double(rawVess), [2 3 1]);   % nSp x nT x nF
+            rawLine = reshape(vol, [nSp, nT*nF]);       % [spatial x total_time]
+
+            % Robust percentile normalisation
+            p_lo = pctileLocal(rawLine(:), 1);
+            p_hi = pctileLocal(rawLine(:), 99);
+            if p_hi > p_lo
+                rawLine = (rawLine - p_lo) / (p_hi - p_lo);
+            end
+            rawLine = max(0, min(1, rawLine));
+
+            % Timing: nT scan reps per frame at fps frames/sec
+            if ~isnan(fps_auto) && fps_auto > 0
+                mspline_v = 1000 / (fps_auto * nT);   % ms per scan line
+                lps_v     = fps_auto * nT;             % lines per second
+            else
+                mspline_v = NaN;  lps_v = NaN;
+            end
+
+            % Default window size: 80 ms (was 40 ms/Drew paper rec.; changed
+            % 2026-08-27), snapped to multiple of 4
+            winMs = 80;
+            if ~isnan(mspline_v) && mspline_v > 0
+                winPx = round((winMs / mspline_v) / 4) * 4;
+                winPx = max(4, winPx);
+            else
+                winPx = 40;
+            end
+            stepPx = round(0.25 * winPx);
+            nWins  = floor((nT * nF) / stepPx) - 3;   % total time cols / step
+
+            s.lsRaw          = rawVess;
+            s.lsRawLine      = rawLine;   % [nSp x (nT*nF)]
+            s.lsPxsz         = pxsz_auto;
+            s.lsBinaryLine   = [];
+            s.lsNumFrames    = nF;
+            s.lsNumSpatial   = nSp;   % spatial pixels (rows of rawLine)
+            s.lsNumTime      = nT;    % scan reps per frame (cols per frame)
+            s.lsCurrentFrame = 1;
+            s.lsCurrentWin   = 1;
+            s.lsNumWins      = max(1, nWins);
+            s.lsMspline      = mspline_v;
+            s.lsLps          = lps_v;
+            s.lsWindowSz_ms  = winMs;
+            s.lsWindowSz_px  = winPx;
+            s.lsStepSz_px    = stepPx;
+            s.lsThresh       = 0.5;
+            s.lsVelocity     = [];
+            s.lsHct          = [];
+            s.lsFlux         = [];
+            s.lsTime         = [];
+            s.lsVelApp       = [];
+            s.lsApplyCharpak = false;
+            s.lsWinLineStart = [];
+            s.lsAngleChecked  = false;
+            s.lsBinarised     = false;
+            s.lsRBCActive     = false;
+            if isfield(s,'lsCropROI') && ~isempty(s.lsCropROI) && isvalid(s.lsCropROI)
+                delete(s.lsCropROI);
+            end
+            s.lsCropRange    = [];
+            s.lsCropPhase    = 'idle';
+            s.lsCropROI      = [];
+            s.lsAnalysisRun  = false;
+            setappdata(fig, 'state', s);
+
+            % Update parameters panel
+            if ~isnan(lps_v)
+                efLps.Value = num2str(lps_v, '%.1f');
+            else
+                efLps.Value = '';
+            end
+            efLsWinSz.Value = winMs;
+
+            % Configure sliders
+            lsFrameSlider.Limits = [1, max(2, nF)];
+            lsFrameSlider.Value  = 1;
+            lblLsFrame.Text      = sprintf('1 / %d', nF);
+            lsWinSlider.Limits   = [1, max(2, nWins)];
+            lsWinSlider.Value    = 1;
+            lblLsWin.Text        = sprintf('Win 1 / %d', nWins);
+
+            % Enable processing buttons now data is loaded
+            btnLsCheckAngle.Enable = 'on';
+            btnLsBinarise.Enable   = 'on';
+            btnLsCrop.Enable       = 'on';
+            btnLsRBC.Enable        = 'off';  % re-enabled once binarised (cb_lsBinarise)
+            btnLsGo.Enable         = 'on';
+
+            % Reset right panel
+            cla(lsBinaryAx);
+            lsBinaryAx.Title.String = 'Binary (not yet computed)';
+            % Explicitly clear the old traces, not just hide the axes - the
+            % previous file's plot lines were left in place under the
+            % hidden axes, so anything that re-shows linescanResultsH
+            % without a fresh Run Analysis (or a rendering hiccup) could
+            % expose stale data from the last file (Kira Shaw with Claude
+            % Code, Aug 2026).
+            cla(lsVelAx);  title(lsVelAx, '');
+            cla(lsHctAx);  title(lsHctAx, '');
+            cla(lsFluxAx); title(lsFluxAx, '');
+            for h = linescanResultsH, h.Visible = false; end
+            lblLsAngleResult.Text = '';
+            lblLsAngleRight.Text  = '';
+            lblLsRBCStatus.Text   = 'Off';
+            lblLsRBCResult.Text    = '';
+            lblLsRBCResult.Visible = 'off';
+            btnLsCrop.Text        = 'Crop (width)';
+            lblLsCropStatus.Text  = 'Not cropped';
+
+            % Render first frame and first window
+            renderLsFrame(s);
+            renderLsWindow(s);
+
+            msg = sprintf('Loaded: %s   (%d frames, %d spatial px, %d scan reps/frame, %d lines total)', ...
+                tifName, nF, nSp, nT, nT*nF);
         else
             % ---- xyDiam setup (unchanged) -----------------------------------
             s.rawVess     = rawVess;
@@ -814,7 +1299,7 @@ setappdata(fig, 'state', state);
         if ~isnan(pxsz_auto)
             msgParts{end+1} = sprintf('Pixel size auto-filled: %.4g um (%s).', pxsz_auto, pxSrc);
         else
-            msgParts{end+1} = 'Pixel size not found in TIF/ini/xml - enter manually.';
+            msgParts{end+1} = 'Pixel size not found in TIF metadata/OME-XML/ini/xml - enter manually.';
         end
         if ~isnan(fps_auto)
             msgParts{end+1} = sprintf('Frame rate auto-filled: %.4g Hz (%s).', fps_auto, fpsSrc);
@@ -836,42 +1321,135 @@ setappdata(fig, 'state', state);
     %  ZSTACK MODE  (Written by Kira Shaw with Claude Code, Aug 2026)
     % =========================================================================
     function cb_analysisChanged()
-        isZ = strcmp(ddAnalysis.Value, 'zstack');
-        s   = getappdata(fig, 'state');
+        isZ  = strcmp(ddAnalysis.Value, 'zstack');
+        isLS = strcmp(ddAnalysis.Value, 'linescan');
+        isXY = ~isZ && ~isLS;
+        s    = getappdata(fig, 'state');
 
-        for h = xyDiamLeftH,  h.Visible = ~isZ; end
-        for h = zstackLeftH,  h.Visible = isZ;  end
-        for h = xyDiamRightH, h.Visible = ~isZ; end
-        for h = zstackRightH, h.Visible = isZ;  end
-        % results grid stays blank until an analysis has actually run, even
-        % in zstack mode - not just "isZ"
-        for h = zstackResultsH, h.Visible = (isZ && s.zAnalysisRun); end
+        % Clear every display axis so no stale content shows in the new mode
+        cla(dispAx);      title(dispAx,'');  xlabel(dispAx,'');  ylabel(dispAx,'');
+        axis(dispAx, 'normal');
+        cla(heatAx);
+        cla(traceAx);     try, legend(traceAx,    'off'); catch, end
+        cla(lsBinaryAx);  lsBinaryAx.Title.String = 'Binary (not yet computed)';
+        cla(lsWinAx);
+        % zstack result axes
+        cla(axSkel);      title(axSkel,      'Skeleton  (max projection)');
+        cla(axDist);      title(axDist,      'Distance to nearest vessel  (max projection, um)');
+                          try, colorbar(axDist,    'off'); catch, end
+                          axis(axDist, 'normal');
+        cla(axDiamDepth); title(axDiamDepth, 'Diameter by depth');
+                          try, legend(axDiamDepth, 'off'); catch, end
+        cla(axLengthDepth); title(axLengthDepth, 'Length by depth');
+        cla(axDistHist);  title(axDistHist,  'Distance to nearest vessel');
+        cla(axTortDepth); title(axTortDepth, 'Tortuosity by depth');
+        % linescan result axes
+        cla(lsVelAx);  cla(lsHctAx);  cla(lsFluxAx);
+        % RBC result label
+        lblLsRBCResult.Text    = '';
+        lblLsRBCResult.Visible = 'off';
+        % reset processing updates
+        txaUpdates.Value = 'Waiting for data input.';
 
-        btnGo.Visible       = ~isZ;
+        for h = xyDiamLeftH,      h.Visible = isXY;                          end
+        for h = zstackLeftH,      h.Visible = isZ;                           end
+        for h = linescanLeftH,    h.Visible = isLS;                          end
+        for h = xyDiamRightH,     h.Visible = isXY;                         end
+        for h = zstackRightH,     h.Visible = isZ;                           end
+        for h = linescanRightH,   h.Visible = isLS;                          end
+        for h = linescanResultsH, h.Visible = (isLS && s.lsAnalysisRun);    end
+        % zstack results stay hidden until analysis has run
+        for h = zstackResultsH,   h.Visible = (isZ && s.zAnalysisRun);      end
+
+        btnGo.Visible       = isXY;
         btnZAnalyze.Visible = isZ;
+        btnLsGo.Visible     = isLS;
 
-        lblNBranch.Visible = ~isZ;
-        efNBranch.Visible  = ~isZ;
+        lblNBranch.Visible = isXY;
+        efNBranch.Visible  = isXY;
         lblZstep.Visible   = isZ;
         efZstep.Visible    = isZ;
+        lblLps.Visible     = isLS;
+        efLps.Visible      = isLS;
 
-        zSlider.Visible   = isZ;
-        lblZFrame.Visible = isZ;
+        zSlider.Visible    = isZ;
+        lblZFrame.Visible  = isZ;
 
         if isZ
-            % 315 -> 287px tall (top 681 -> 653) - Written by Kira Shaw
-            % with Claude Code, Aug 2026 - to fit the Slant-correct row
-            % (now 2 checkboxes, was 1) above it
-            dispAx.Position       = P(LX,366,LW,287);
-            lblDisplayHeader.Text = 'Z-stack display';
+            dispAx.Position           = P(LX,366,LW,287);
+            lsBinaryAx.Position       = P(RX,528,RW,186);
+            lblDisplayHeader.Position = P(LX,684,250,18);
+            lblDisplayHeader.Text     = 'Z-stack display';
+            lblDisplayHeader.Visible  = 'on';   % linescan mode hides this - restore it here
+            lblLsBinaryHdr.Position   = P(RX,718,500,18);   % restore default
+            lblLsFrameHdr.Position    = P(LX,    417,70,14);
+            lblLsFrame.Position       = P(LX+72, 417,90,14);
+            lsFrameSlider.Position    = Pslider(LX+170, 420, LW-175);
+            lblLsAngleRight.Position  = P(RX,507,RW,18);
+        elseif isLS
+            % Raw and binary panels sit side by side in the LEFT panel,
+            % in the space normally occupied by dispAx (y=435, h=240).
+            % An 18 px strip on the far left holds the per-frame window slider.
+            % The right panel is kept clear for future data displays.
+            slW = 18;  % vertical slider strip width
+            halfW_ls = floor((LW - 6 - slW) / 2);   % ~195 px each
+            panelsRight = LX+slW+2*halfW_ls+6;       % right edge of lsBinaryAx
+            lsWinVertSlider.Position  = PsliderV(LX, 435, 240);
+            dispAx.Position           = P(LX+slW,           435, halfW_ls, 240);
+            lsBinaryAx.Position       = P(LX+slW+halfW_ls+6, 435, halfW_ls, 240);
+            % "Linescan | raw (left) binary (right)" and "Frame #/#" are
+            % dropped here - both are redundant with dispAx's own "Raw -
+            % frame #/#" title, and removing them frees up the top strip
+            % for the "Sliding window: Win #/#" readout below (Kira Shaw
+            % with Claude Code, Aug 2026).
+            lblDisplayHeader.Visible  = 'off';
+            lblLsFrameHdr.Visible     = 'off';
+            lblLsFrame.Visible        = 'off';
+            lblLsBinaryHdr.Position   = P(-600,-50,LW,18);  % parked off-screen
+            % Raw and binary must always show matching axes - re-applied here
+            % (not just in the render functions) so they still match even
+            % before any file is loaded (Written by Kira Shaw with Claude
+            % Code, Aug 2026).
+            xlabel(dispAx, 'Spatial pixel');     ylabel(dispAx, 'Scan line (time ↓)');
+            xlabel(lsBinaryAx, 'Spatial pixel'); ylabel(lsBinaryAx, 'Scan line (time ↓)');
+            % "Window" label sits directly above lsWinVertSlider; frame
+            % slider spans the full width below BOTH raw and binary. The
+            % "Sliding window: Win #/#" pair (previously right below the
+            % small preview axes, where it crowded that axes' rotated Y-
+            % label) now sits here instead, in the space "Frame #/#" used
+            % to occupy before being dropped above (Kira Shaw with Claude
+            % Code, Aug 2026).
+            lblLsWinVertHdr.Position  = P(LX,        676, 50,12);
+            lblLsWinVertVal.Position  = P(LX,        662, 50,12);
+            lblLsWinHdr.Position      = P(LX+slW+60, 676, 100,12);
+            lblLsWin.Position         = P(LX+slW+164,676, 90,12);
+            lsFrameSlider.Position    = Pslider(LX+slW, 420, panelsRight-(LX+slW));
+            % Angle result + RBC result in right panel - sit just below the
+            % Processing updates box (which ends around y=730), well clear
+            % of where the Run-analysis line plots render (y up to 483), so
+            % they never fight the plots for space (Kira Shaw with Claude
+            % Code, Aug 2026).
+            lblLsAngleRight.Position  = P(RX, 702, 700, 20);
+            lblLsRBCResult.Position   = P(RX, 672, 700, 28);
         else
-            dispAx.Position       = P(LX,320,LW,361);
-            lblDisplayHeader.Text = 'Vessel display  (frame ~50)';
+            dispAx.Position           = P(LX,320,LW,361);
+            lsBinaryAx.Position       = P(RX,528,RW,186);
+            lblDisplayHeader.Position = P(LX,684,250,18);
+            lblDisplayHeader.Text     = 'Vessel display  (frame ~50)';
+            lblDisplayHeader.Visible  = 'on';   % linescan mode hides this - restore it here
+            lblLsBinaryHdr.Position   = P(RX,718,500,18);   % restore default
+            lblLsFrameHdr.Position    = P(LX,    417,70,14);
+            lblLsFrame.Position       = P(LX+72, 417,90,14);
+            lsFrameSlider.Position    = Pslider(LX+170, 420, LW-175);
+            lblLsAngleRight.Position  = P(RX,507,RW,18);
         end
 
         if isZ && ~isempty(s.zRaw)
             renderZFrame(s);
-        elseif ~isZ && ~isempty(s.rawVess)
+        elseif isLS && ~isempty(s.lsRawLine)
+            renderLsFrame(s);
+            renderLsWindow(s);
+        elseif isXY && ~isempty(s.rawVess)
             refreshDisplay(s, s.skeletons, s.masks);
         end
     end
@@ -1551,7 +2129,15 @@ setappdata(fig, 'state', state);
             % stats line is more useful in the exported figure, where
             % there's room for it (Written by Kira Shaw with Claude Code,
             % Aug 2026; see cb_zExportFig)
-            scatter(axDiamDepth, depthVals, diamVals, 10, [0.30 0.50 0.95], 'filled');
+            msk_cap = diamVals < 7;
+            msk_int = diamVals >= 7 & diamVals < 12;
+            msk_art = diamVals >= 12;
+            hold(axDiamDepth, 'on');
+            if any(msk_cap), scatter(axDiamDepth, depthVals(msk_cap), diamVals(msk_cap), 12, [0.15 0.65 0.25], 'filled', 'DisplayName', 'Capillaries (<7um)');       end
+            if any(msk_int), scatter(axDiamDepth, depthVals(msk_int), diamVals(msk_int), 12, [0.92 0.48 0.65], 'filled', 'DisplayName', 'Intermediate (7-12um)');    end
+            if any(msk_art), scatter(axDiamDepth, depthVals(msk_art), diamVals(msk_art), 12, [0.20 0.45 0.80], 'filled', 'DisplayName', 'Arterioles (>=12um)');      end
+            hold(axDiamDepth, 'off');
+            legend(axDiamDepth, 'Location', 'best', 'FontSize', 7);
             title(axDiamDepth, {'Diameter by depth', nLine(diamVals, 'nVess=')});
 
             scatter(axLengthDepth, depthVals, lengthVals, 10, [0.90 0.20 0.20], 'filled');
@@ -1597,7 +2183,7 @@ setappdata(fig, 'state', state);
         % Written by Kira Shaw with Claude Code, Aug 2026.
         s = getappdata(fig, 'state');
         if ~s.zAnalysisRun
-            uialert(fig, 'Run "Process Stack" first.', 'No results');
+            postUpdate('User needs to extract data first');
             return;
         end
 
@@ -1832,7 +2418,7 @@ setappdata(fig, 'state', state);
     function cb_zExportFig()
         s = getappdata(fig, 'state');
         if ~s.zAnalysisRun
-            uialert(fig, 'Run "Process Stack" first.', 'No results');
+            postUpdate('User needs to extract data first');
             return;
         end
 
@@ -1989,7 +2575,15 @@ setappdata(fig, 'state', state);
         % histogram, tortuosity-by-depth (Written by Kira Shaw with Claude
         % Code, Aug 2026) ----------------------------------------------------
         ax4 = axes('Parent', expFig, 'Position', pos2(1));
-        scatter(ax4, depthVals, diamVals, 10, [0.30 0.50 0.95], 'filled');
+        msk_cap = diamVals < 7;
+        msk_int = diamVals >= 7 & diamVals < 12;
+        msk_art = diamVals >= 12;
+        hold(ax4, 'on');
+        if any(msk_cap), scatter(ax4, depthVals(msk_cap), diamVals(msk_cap), 12, [0.15 0.65 0.25], 'filled', 'DisplayName', 'Capillaries (<7um)');       end
+        if any(msk_int), scatter(ax4, depthVals(msk_int), diamVals(msk_int), 12, [0.92 0.48 0.65], 'filled', 'DisplayName', 'Intermediate (7-12um)');    end
+        if any(msk_art), scatter(ax4, depthVals(msk_art), diamVals(msk_art), 12, [0.20 0.45 0.80], 'filled', 'DisplayName', 'Arterioles (>=12um)');      end
+        hold(ax4, 'off');
+        legend(ax4, 'Location', 'best', 'FontSize', 8);
         xlabel(ax4, 'Depth (um)');  ylabel(ax4, 'Diameter (um)');
         title(ax4, {'Diameter by depth', statsLine(diamVals, 'um', 'nVess=')});
         grid(ax4, 'on');
@@ -2539,10 +3133,14 @@ setappdata(fig, 'state', state);
             cb_zExport();
             return;
         end
+        if strcmp(ddAnalysis.Value, 'linescan')
+            cb_lsExport();
+            return;
+        end
 
         s = getappdata(fig, 'state');
         if ~s.analysisRun
-            uialert(fig, 'Run analysis first.', 'No results');  return;
+            postUpdate('User needs to extract data first');  return;
         end
 
         choice = uiconfirm(fig, 'Choose export format:', 'Export', ...
@@ -2635,10 +3233,14 @@ setappdata(fig, 'state', state);
             cb_zExportFig();
             return;
         end
+        if strcmp(ddAnalysis.Value, 'linescan')
+            cb_lsExportFig();
+            return;
+        end
 
         s = getappdata(fig, 'state');
         if ~s.analysisRun
-            uialert(fig, 'Run analysis first.', 'No results');  return;
+            postUpdate('User needs to extract data first');  return;
         end
 
         nB       = numel(s.cont_diams);
@@ -2736,11 +3338,39 @@ setappdata(fig, 'state', state);
         end
     end
 
+    % -------------------------------------------------------------------------
+    function cb_reset()
+    % Resets the GUI back to the state it's in when first launched: discards
+    % all loaded/analysed data across all three analysis modes. Genuinely
+    % relaunches a fresh instance rather than hand-resetting every field/
+    % control individually, which would risk silently missing one as the
+    % app grows - relaunching guarantees exact parity with a fresh launch,
+    % with no drift risk (Kira Shaw with Claude Code, Aug 2026).
+        choice = uiconfirm(fig, ...
+            'Reset the GUI? This discards all loaded/analysed data for every tab.', ...
+            'Reset MAPS', 'Options', {'Reset', 'Cancel'}, ...
+            'DefaultOption', 2, 'CancelOption', 2, 'Icon', 'warning');
+        if ~strcmp(choice, 'Reset'), return; end
+        oldFig = fig;
+        MAPS();
+        close(oldFig);
+    end
+
     % =========================================================================
     %  HELPERS
     % =========================================================================
     function postUpdate(msg)
+        lblUpdatesError.Visible = 'off';   % clear any standing red-bold error
         txaUpdates.Value = msg;
+        drawnow;
+    end
+
+    function postError(msg)
+    % Red bold error in the Processing updates area (uitextarea can't do
+    % rich text itself, so this is an overlay label shown in its place
+    % until the next postUpdate()) - Kira Shaw with Claude Code, Aug 2026.
+        lblUpdatesError.Text    = msg;
+        lblUpdatesError.Visible = 'on';
         drawnow;
     end
 
@@ -3069,6 +3699,1079 @@ setappdata(fig, 'state', state);
         end
     end
 
+    % =========================================================================
+    %  LINESCAN CALLBACKS  (Written by Kira Shaw with Claude Code, Aug 2026)
+    %
+    %  DATA CONVENTION (matches original extractLinescanVelocity.m):
+    %  rawLine = [nSp x (nT*nF)]
+    %    rows  = spatial pixels along the scan line  (Y-axis, portrait, many)
+    %    cols  = scan-line repetitions / time        (X-axis, few per frame)
+    %  Frame f occupies columns (f-1)*nT+1 : f*nT.
+    %  Window w occupies columns (w-1)*stepPx+1 : (w-1)*stepPx+winPx.
+    %  For Radon (expects [time x spatial]), always pass win_data' (transpose).
+    % =========================================================================
+
+    % -------------------------------------------------------------------------
+    function renderLsFrame(s)
+    % Show current frame in dispAx: rows=time (Y, top→bottom), cols=spatial (X).
+    % Binary frame shown simultaneously in lsBinaryAx at same orientation.
+    % Window = horizontal yellow band on both images.
+        if isempty(s.lsRawLine), return; end
+        nT = s.lsNumTime;    % scan reps per frame → rows in display
+        nSp = s.lsNumSpatial;% spatial pixels  → cols in display
+        nF = s.lsNumFrames;
+        f  = max(1, min(nF, s.lsCurrentFrame));
+        c0 = (f-1)*nT + 1;
+        c1 = f*nT;
+        % Transpose: rawLine is [nSp × nT], display wants [nT × nSp]
+        frame_data = s.lsRawLine(:, c0:c1)';  % [nT × nSp]: time on Y, space on X
+
+        imagesc(dispAx, frame_data);
+        colormap(dispAx, 'gray');
+        axis(dispAx, 'image');
+        % Direction of the window sweep within the frame - flipped per Kira
+        % Shaw's repeated, screenshot-confirmed report that it was still
+        % running bottom-to-top after the previous 'reverse' attempt (which
+        % had tested correct in isolation but evidently wasn't what the
+        % real running app showed); this + the matching flips in the
+        % slider-sync/drag formulas below and in ls_refreshBinaryDisplay
+        % are the full, consistent set of places this convention lives
+        % (Kira Shaw with Claude Code, Aug 2026).
+        dispAx.YDir = 'normal';
+        xlabel(dispAx, 'Spatial pixel');
+        ylabel(dispAx, 'Scan line (time ↓)');
+        title(dispAx, sprintf('Raw  —  frame %d / %d', f, nF));
+        % Match lsBinaryAx's title size (set once at its declaration) - dispAx
+        % otherwise falls back to uiaxes' larger default title font, making
+        % "Raw" and "Binary" look like mismatched-size panels even though
+        % the axes themselves are already the same size (Kira Shaw with
+        % Claude Code, Aug 2026).
+        dispAx.Title.FontSize = F(9);
+
+        % Window indicator: horizontal band (spans all X, covers window rows in Y)
+        winPx  = s.lsWindowSz_px;
+        stepPx = s.lsStepSz_px;
+        w      = s.lsCurrentWin;
+        abs_c0 = 1 + (w-1)*stepPx;   % absolute time-col start of window
+        abs_c1 = abs_c0 + winPx - 1;
+        % map to frame-local row in the transposed display (row = time step)
+        lr0 = abs_c0 - c0 + 1;
+        lr1 = abs_c1 - c0 + 1;
+        if lr1 >= 1 && lr0 <= nT
+            y0 = max(1, lr0) - 0.5;
+            y1 = min(nT, lr1) + 0.5;
+            hold(dispAx, 'on');
+            rectangle(dispAx, 'Position', [0.5 y0 nSp y1-y0], ...
+                'EdgeColor', [1 0.8 0], 'LineWidth', 2, 'LineStyle', '--');
+            hold(dispAx, 'off');
+        end
+
+        % Sync the per-frame vertical window slider, and its live value
+        % readout (1 at top, maxLr at bottom). Direct (not inverted)
+        % mapping to match the dispAx.YDir flip above - Kira Shaw with
+        % Claude Code, Aug 2026.
+        if winPx > 0 && nT > 0
+            maxLr = max(2, nT - winPx + 1);
+            lsWinVertSlider.Limits = [1, maxLr];
+            lr0_clamped = max(1, min(maxLr, lr0));
+            lsWinVertSlider.Value = lr0_clamped;
+            lblLsWinVertVal.Text = sprintf('%d/%d', lr0_clamped, maxLr);
+        end
+
+        % Update binary panel to match this frame
+        ls_refreshBinaryDisplay(s);
+    end
+
+    % -------------------------------------------------------------------------
+    function renderLsWindow(s)
+    % Show current window in lsWinAx: rows=time (Y, top→bottom), cols=spatial (X).
+    % Same orientation as the frame display above. Overlays angle line / RBC dots.
+        if isempty(s.lsRawLine), return; end
+        winPx  = s.lsWindowSz_px;
+        stepPx = s.lsStepSz_px;
+        w      = s.lsCurrentWin;
+        c0     = 1 + (w-1)*stepPx;
+        c1     = c0 + winPx - 1;
+        nTot   = size(s.lsRawLine, 2);
+        c1     = min(c1, nTot);
+        if c0 > nTot || c0 >= c1, return; end
+
+        % Transpose to [winPx × nSp]: time on Y, spatial on X
+        win_data = s.lsRawLine(:, c0:c1)';
+        imagesc(lsWinAx, win_data);
+        colormap(lsWinAx, 'gray');
+        axis(lsWinAx, 'image');
+        lsWinAx.YDir = 'reverse';   % row 1 (earliest time) at top - see dispAx above
+        xlabel(lsWinAx, 'Spatial pixel');
+        ylabel(lsWinAx, 'Scan line (time ↓)');
+        title(lsWinAx, sprintf('Window %d  (lines %d-%d)', w, c0, c0+size(win_data,1)-1));
+
+        % Angle line: in display X=spatial, Y=time.
+        % Radon coarse_angle is measured from the Y-axis (time axis).
+        % streak direction: dx_spatial = sin(coarse_angle), dy_time = cos(coarse_angle).
+        if s.lsAngleChecked && ~isempty(lblLsAngleResult.UserData)
+            raw_angle = lblLsAngleResult.UserData;
+            nR = size(win_data, 1);   % winPx (time, Y)
+            nC = size(win_data, 2);   % nSp   (spatial, X)
+            xc = nC/2;  yc = nR/2;
+            L  = min(nR, nC) * 0.40;
+            dx = L * sind(raw_angle);
+            dy = L * cosd(raw_angle);
+            hold(lsWinAx, 'on');
+            plot(lsWinAx, [xc-dx xc+dx], [yc-dy yc+dy], 'r-', 'LineWidth', 2);
+            hold(lsWinAx, 'off');
+        end
+
+        % RBC count — count dark/light transitions along thin strips at BOTH
+        % the left and right edges of the window, rather than a whole-window
+        % 2D blob count. RBCs cross the window as diagonal dark streaks
+        % (space vs time), so a 2D connected-component count is fragile: a
+        % single streak can come out as several small disconnected blobs
+        % (killed by the area-floor filter, as happened here - 2 or 3
+        % clearly visible streaks scored as 0) or several streaks can touch
+        % and merge into one blob. Sampling an edge instead - exactly like
+        % the batch flux calculation in cb_lsGo already does at the centre
+        % column - turns each streak into one clean dark run. Using BOTH
+        % edges (widened from 3 to 5 px each) and averaging their counts
+        % rather than just the right edge: a streak that's faint or exits
+        % the window's top/bottom before reaching one edge can still be
+        % caught by the other, and closely-spaced streaks that blur together
+        % on one edge often separate cleanly on the other (Kira Shaw with
+        % Claude Code, Aug 2026).
+        if s.lsRBCActive && s.lsBinarised && ~isempty(s.lsBinaryLine)
+            binWin = s.lsBinaryLine(:, c0:min(c1, size(s.lsBinaryLine,2)))';  % [winPx x nSp]
+            nC = size(binWin, 2);
+            edgeW = min(5, max(1, floor(nC/2)));   % a few px each side, widened from 3
+
+            [nRBC_R, rs_R, re_R] = countEdgeDarkRuns(binWin(:, end-edgeW+1:end));
+            [nRBC_L, rs_L, re_L] = countEdgeDarkRuns(binWin(:, 1:edgeW));
+            nRBC = round((nRBC_R + nRBC_L) / 2);
+
+            if ~isempty(rs_R)
+                cy = (rs_R + re_R) / 2;  cx = repmat(nC - (edgeW-1)/2, numel(rs_R), 1);
+                hold(lsWinAx, 'on');  plot(lsWinAx, cx, cy, 'r.', 'MarkerSize', 18);  hold(lsWinAx, 'off');
+            end
+            if ~isempty(rs_L)
+                cy = (rs_L + re_L) / 2;  cx = repmat((edgeW+1)/2, numel(rs_L), 1);
+                hold(lsWinAx, 'on');  plot(lsWinAx, cx, cy, 'm.', 'MarkerSize', 18);  hold(lsWinAx, 'off');
+            end
+
+            lblLsRBCResult.FontColor = [0.08 0.45 0.08];
+            lblLsRBCResult.Text = sprintf(...
+                'RBCs in window: %d  (L=%d magenta, R=%d red, avg)', nRBC, nRBC_L, nRBC_R);
+            lblLsRBCResult.Visible = 'on';
+        end
+    end
+
+    % -------------------------------------------------------------------------
+    function cb_lsFrameSlider(value, fastMode)
+        if nargin < 2, fastMode = false; end
+        s = getappdata(fig, 'state');
+        if isempty(s.lsRawLine), return; end
+        f = max(1, min(s.lsNumFrames, round(value)));
+        s.lsCurrentFrame = f;
+        lblLsFrame.Text  = sprintf('%d / %d', f, s.lsNumFrames);
+        % Keep window at the same vertical position within the frame
+        % (read from the per-frame vert slider rather than jumping to centre)
+        nT     = s.lsNumTime;
+        winPx  = s.lsWindowSz_px;
+        stepPx = s.lsStepSz_px;
+        maxLr  = max(1, nT - winPx + 1);
+        slVal  = lsWinVertSlider.Value;
+        lr0 = max(1, min(maxLr, round(slVal)));  % direct - matches the flipped sync/YDir above
+        abs_c0 = (f-1)*nT + lr0;
+        w = max(1, min(s.lsNumWins, round((abs_c0-1)/stepPx) + 1));
+        s.lsCurrentWin    = w;
+        lsWinSlider.Value = min(w, lsWinSlider.Limits(2));
+        lblLsWin.Text     = sprintf('Win %d / %d', w, s.lsNumWins);
+        % Any angle-check result on screen was for a different window - clear
+        % it rather than leave it shown as if still valid; the window preview
+        % (image + RBC dots) always refreshes below, on every slide tick
+        % (this used to be skipped during dragging, and for this slider
+        % specifically skipped on release too, which was the reported "window
+        % display doesn't update" bug - Kira Shaw with Claude Code, Aug 2026).
+        s.lsAngleChecked      = false;
+        lblLsAngleResult.Text = '';
+        lblLsAngleRight.Text  = '';
+        setappdata(fig, 'state', s);
+        renderLsFrame(s);
+        renderLsWindow(s);
+    end
+
+    % -------------------------------------------------------------------------
+    function cb_lsWinSlider(value, fastMode)
+        if nargin < 2, fastMode = false; end
+        s = getappdata(fig, 'state');
+        if isempty(s.lsRawLine), return; end
+        w = max(1, min(s.lsNumWins, round(value)));
+        s.lsCurrentWin = w;
+        lblLsWin.Text  = sprintf('Win %d / %d', w, s.lsNumWins);
+        % update frame to the one that contains this window centre
+        nT         = s.lsNumTime;
+        win_c_abs  = 1 + (w-1)*s.lsStepSz_px + round(s.lsWindowSz_px/2);
+        f = max(1, min(s.lsNumFrames, floor((win_c_abs-1)/nT) + 1));
+        s.lsCurrentFrame    = f;
+        lsFrameSlider.Value = f;
+        lblLsFrame.Text     = sprintf('%d / %d', f, s.lsNumFrames);
+        s.lsAngleChecked      = false;
+        lblLsAngleResult.Text = '';
+        lblLsAngleRight.Text  = '';
+        setappdata(fig, 'state', s);
+        renderLsFrame(s);
+        renderLsWindow(s);
+    end
+
+    % -------------------------------------------------------------------------
+    function cb_lsWinSzChanged()
+        s = getappdata(fig, 'state');
+        if isempty(s.lsRawLine), return; end
+        winMs_new = efLsWinSz.Value;
+        if isnan(winMs_new) || winMs_new <= 0
+            efLsWinSz.Value = s.lsWindowSz_ms;
+            return;
+        end
+        % Window size (ms) must be divisible by 4, so the derived pixel
+        % window/step (winPx, winPx/4) stay whole numbers - flagged in red
+        % bold rather than silently rounded, and reverts to the last valid
+        % value (Kira Shaw with Claude Code, Aug 2026).
+        if mod(winMs_new, 4) ~= 0
+            postError('Window size must be divisible by 4.');
+            efLsWinSz.Value = s.lsWindowSz_ms;
+            return;
+        end
+        if ~isnan(s.lsMspline) && s.lsMspline > 0
+            winPx_new = round((winMs_new / s.lsMspline) / 4) * 4;
+        else
+            winPx_new = round(winMs_new / 4) * 4;
+        end
+        winPx_new = max(4, winPx_new);
+        stepPx_new = max(1, round(0.25 * winPx_new));
+        nTot = size(s.lsRawLine, 2);   % total time columns
+        nWins_new = max(1, floor(nTot / stepPx_new) - 3);
+        s.lsWindowSz_ms = winMs_new;
+        s.lsWindowSz_px = winPx_new;
+        s.lsStepSz_px   = stepPx_new;
+        s.lsNumWins     = nWins_new;
+        s.lsCurrentWin  = min(s.lsCurrentWin, nWins_new);
+        lsWinSlider.Limits = [1, max(2, nWins_new)];
+        lsWinSlider.Value  = s.lsCurrentWin;
+        lblLsWin.Text = sprintf('Win %d / %d', s.lsCurrentWin, nWins_new);
+        setappdata(fig, 'state', s);
+        renderLsFrame(s);
+        renderLsWindow(s);
+    end
+
+    % -------------------------------------------------------------------------
+    function cb_lsWinVertSlider(value, fastMode)
+    % Vertical slider on the left of the linescan display: moves the yellow window
+    % band up/down within the current frame without changing the frame.
+    % Direct (not inverted) mapping - matches the flipped sync/YDir in
+    % renderLsFrame (Kira Shaw with Claude Code, Aug 2026).
+        if nargin < 2, fastMode = false; end
+        s = getappdata(fig, 'state');
+        if isempty(s.lsRawLine), return; end
+        nT     = s.lsNumTime;
+        winPx  = s.lsWindowSz_px;
+        stepPx = s.lsStepSz_px;
+        f      = s.lsCurrentFrame;
+        maxLr  = max(1, nT - winPx + 1);
+        lr0 = max(1, min(maxLr, round(value)));
+        % convert local row in frame to absolute time column, then to window index
+        abs_c0 = (f-1)*nT + lr0;
+        w = max(1, min(s.lsNumWins, round((abs_c0-1)/stepPx) + 1));
+        s.lsCurrentWin    = w;
+        lsWinSlider.Value = min(w, lsWinSlider.Limits(2));
+        lblLsWin.Text     = sprintf('Win %d / %d', w, s.lsNumWins);
+        s.lsAngleChecked      = false;
+        lblLsAngleResult.Text = '';
+        lblLsAngleRight.Text  = '';
+        setappdata(fig, 'state', s);
+        renderLsFrame(s);
+        renderLsWindow(s);
+    end
+
+    % -------------------------------------------------------------------------
+    function cb_lsCheckAngle()
+    % Quick Radon on current window to detect scan direction and signal quality.
+        s = getappdata(fig, 'state');
+        if isempty(s.lsRawLine)
+            uialert(fig, 'Load a linescan file first.', 'No data');
+            return;
+        end
+        % Angle-check is a one-shot per-window computation, not auto-recomputed
+        % on slide (the radon transform here is too expensive to run on every
+        % drag tick) - the slider callbacks clear the result as soon as the
+        % user moves away from this window, so re-click here for wherever
+        % they land (Kira Shaw with Claude Code, Aug 2026).
+        c0 = 1 + (s.lsCurrentWin-1)*s.lsStepSz_px;
+        c1 = min(c0+s.lsWindowSz_px-1, size(s.lsRawLine,2));
+        win_data = s.lsRawLine(:, c0:c1);   % [nSp x winPx]
+
+        % For Radon, transpose to [winPx x nSp] (time in rows) then apply
+        % two-way mean subtraction
+        wd = win_data';   % [winPx x nSp]
+        wd = wd - mean(wd,1) - mean(wd,2) + mean(wd(:));
+
+        if var(wd(:)) < eps
+            msg = 'Window is uniform — no signal to analyse.';
+            lblLsAngleResult.Text = msg;
+            lblLsAngleRight.Text  = msg;
+            postUpdate(['Angle check: ' msg]);
+            return;
+        end
+
+        % Coarse then fine Radon
+        R_c = radon(wd, 0:179);
+        all_var = var(R_c);
+        [~, idx_c] = max(all_var);
+        coarse_angle = idx_c - 1;
+        R_f = radon(wd, coarse_angle + (-3:0.1:3));
+        [~, idx_f] = max(var(R_f));
+        fine_total   = coarse_angle + (-3:0.1:3);
+        fine_total   = fine_total(idx_f);
+        theta        = -1*(fine_total - 90);
+
+        % Signal quality: peak/median variance ratio
+        snr = max(all_var) / max(median(all_var), eps);
+
+        if snr < 3
+            direction = 'noisy';
+            dirTxt    = 'NOISY — do not proceed with analysis';
+            postUpdate(sprintf('Angle check: SNR=%.1f (too low). Check imaging quality.', snr));
+        elseif theta > 2
+            direction = 'retrograde';
+            dirTxt    = sprintf('Retrograde scan  (%.1f deg, SNR=%.0f)', theta, snr);
+        elseif theta < -2
+            direction = 'anterograde';
+            dirTxt    = sprintf('Anterograde/wrong-way scan  (%.1f deg, SNR=%.0f)', theta, snr);
+        else
+            direction = 'uncertain';
+            dirTxt    = sprintf('Direction uncertain  (|theta|<2 deg, SNR=%.0f)', snr);
+        end
+
+        lblLsAngleResult.UserData = coarse_angle;
+        lblLsAngleResult.Text     = dirTxt;
+        lblLsAngleRight.Text      = ['Direction: ' dirTxt];
+        s.lsAngleChecked = ~strcmp(direction, 'noisy');
+        setappdata(fig, 'state', s);
+        renderLsWindow(s);
+    end
+
+    % -------------------------------------------------------------------------
+    function cb_lsBinarise()
+        s = getappdata(fig, 'state');
+        if isempty(s.lsRawLine)
+            uialert(fig, 'Load a linescan file first.', 'No data');
+            return;
+        end
+        thresh         = sldLsThresh.Value;
+        s.lsThresh     = thresh;
+        s.lsBinaryLine = s.lsRawLine >= thresh;   % true=bright (plasma)
+        s.lsBinarised  = true;
+        setappdata(fig, 'state', s);
+        ls_refreshBinaryDisplay(s);
+        sldLsThresh.Enable = 'on';
+        btnLsRBC.Enable    = 'on';
+    end
+
+    % -------------------------------------------------------------------------
+    function ls_refreshBinaryDisplay(s)
+    % Show binarised frame in lsBinaryAx at same orientation as dispAx:
+    % rows=time (Y top→bottom), cols=spatial (X). Also draws the window band.
+        if isempty(s.lsBinaryLine), return; end
+        nT  = s.lsNumTime;
+        nSp = s.lsNumSpatial;
+        f   = s.lsCurrentFrame;
+        c0  = (f-1)*nT + 1;
+        c1  = min(f*nT, size(s.lsBinaryLine, 2));
+        if c0 > size(s.lsBinaryLine, 2), return; end
+        frame_bin = double(s.lsBinaryLine(:, c0:c1))';  % [nT × nSp]
+        imagesc(lsBinaryAx, frame_bin, [0 1]);
+        colormap(lsBinaryAx, 'gray');
+        axis(lsBinaryAx, 'image');
+        lsBinaryAx.YDir = 'normal';   % matches the flipped dispAx above
+        title(lsBinaryAx, sprintf('Binary  (thresh=%.2f)', s.lsThresh));
+        xlabel(lsBinaryAx, 'Spatial pixel');
+        ylabel(lsBinaryAx, 'Scan line (time ↓)');
+
+        % Matching window band
+        winPx  = s.lsWindowSz_px;
+        stepPx = s.lsStepSz_px;
+        w      = s.lsCurrentWin;
+        abs_c0 = 1 + (w-1)*stepPx;
+        lr0    = abs_c0 - c0 + 1;
+        lr1    = lr0 + winPx - 1;
+        if lr1 >= 1 && lr0 <= nT
+            y0 = max(1, lr0) - 0.5;
+            y1 = min(nT, lr1) + 0.5;
+            hold(lsBinaryAx, 'on');
+            rectangle(lsBinaryAx, 'Position', [0.5 y0 nSp y1-y0], ...
+                'EdgeColor', [1 0.8 0], 'LineWidth', 2, 'LineStyle', '--');
+            hold(lsBinaryAx, 'off');
+        end
+    end
+
+    % -------------------------------------------------------------------------
+    function cb_lsThreshSlider(value, fastMode)
+        if nargin < 2, fastMode = false; end
+        s = getappdata(fig, 'state');
+        if isempty(s.lsRawLine), return; end
+        s.lsThresh     = value;
+        s.lsBinaryLine = s.lsRawLine >= value;
+        s.lsBinarised  = true;
+        setappdata(fig, 'state', s);
+        if ~fastMode
+            ls_refreshBinaryDisplay(s);
+            renderLsWindow(s);
+        end
+    end
+
+    % -------------------------------------------------------------------------
+    function cb_lsRBCToggle()
+    % "Detect individual RBCs" is a toggle button (was a checkbox), so its
+    % on/off state lives in s.lsRBCActive rather than a .Value property.
+    % Toggling it on also updates immediately on the current window, and
+    % (since renderLsWindow is what the frame/window sliders call on every
+    % slide) keeps updating live as the user moves through the data - same
+    % as the angle check (Kira Shaw with Claude Code, Aug 2026).
+        s = getappdata(fig, 'state');
+        if ~s.lsRBCActive && ~s.lsBinarised
+            uialert(fig, 'Binarise the image first before detecting individual RBCs.', ...
+                'Binarise First');
+            return;
+        end
+        s.lsRBCActive = ~s.lsRBCActive;
+        setappdata(fig, 'state', s);
+        if s.lsRBCActive
+            lblLsRBCStatus.Text      = 'On';
+            lblLsRBCStatus.FontColor = [0.08 0.45 0.08];
+        else
+            lblLsRBCStatus.Text      = 'Off';
+            lblLsRBCStatus.FontColor = [0.45 0.45 0.45];
+            lblLsRBCResult.Text      = '';
+            lblLsRBCResult.Visible   = 'off';
+        end
+        renderLsWindow(s);
+    end
+
+    % -------------------------------------------------------------------------
+    function s = regenLsRawLine(s)
+    % Rebuild s.lsRawLine (and dependent counts) from the untouched s.lsRaw,
+    % applying s.lsCropRange (spatial px, in ORIGINAL coordinates) if set.
+    % Mirrors the rawLine-construction block in the linescan file-load path
+    % above; kept in sync with it deliberately (same reshape/normalise
+    % steps) so crop/reset never drifts from what a fresh load would give.
+    % Only the spatial (width) dimension is ever cropped - time/height is
+    % untouched, so mspline/lps/winPx/stepPx/nWins all stay valid as-is
+    % (Kira Shaw with Claude Code, Aug 2026).
+        if isempty(s.lsCropRange)
+            vol = s.lsRaw;
+        else
+            x0 = s.lsCropRange(1);  x1 = s.lsCropRange(2);
+            vol = s.lsRaw(:, x0:x1, :);
+        end
+        nF  = size(vol, 1);
+        nSp = size(vol, 2);
+        nT  = size(vol, 3);
+        volP = permute(double(vol), [2 3 1]);
+        rawLine = reshape(volP, [nSp, nT*nF]);
+        p_lo = pctileLocal(rawLine(:), 1);
+        p_hi = pctileLocal(rawLine(:), 99);
+        if p_hi > p_lo
+            rawLine = (rawLine - p_lo) / (p_hi - p_lo);
+        end
+        rawLine = max(0, min(1, rawLine));
+        s.lsRawLine    = rawLine;
+        s.lsNumSpatial = nSp;
+        s.lsNumFrames  = nF;
+        s.lsNumTime    = nT;
+    end
+
+    % -------------------------------------------------------------------------
+    function cb_lsCropToggle()
+    % Width-only crop, optional. Button is a 3-state toggle:
+    %   idle    -> start drawing a crop line on the raw display (dispAx)
+    %   drawing -> discard the in-progress line, start drawing again
+    %              ("redo this if they decide its wrong")
+    %   applied -> reset to full width AND immediately start drawing again
+    %              ("click the button and repeat should they wish")
+    % Only the line's X-extent is used (start/end of crop); Y is ignored,
+    % since height encodes time and must never be cropped (Kira Shaw with
+    % Claude Code, Aug 2026).
+        s = getappdata(fig, 'state');
+        if isempty(s.lsRaw)
+            uialert(fig, 'Load a linescan file first.', 'No data');
+            return;
+        end
+        if isfield(s,'lsCropROI') && ~isempty(s.lsCropROI) && isvalid(s.lsCropROI)
+            delete(s.lsCropROI);
+        end
+        switch s.lsCropPhase
+            case 'applied'
+                s.lsCropRange = [];
+                s = regenLsRawLine(s);
+                s.lsBinarised     = false;  s.lsBinaryLine = [];
+                s.lsAngleChecked  = false;
+                s.lsRBCActive     = false;
+                sldLsThresh.Enable = 'off';
+                btnLsRBC.Enable    = 'off';
+                lblLsRBCStatus.Text      = 'Off';
+                lblLsRBCStatus.FontColor = [0.45 0.45 0.45];
+                lblLsRBCResult.Text      = '';
+                lblLsRBCResult.Visible   = 'off';
+                lblLsAngleResult.Text = '';
+                lblLsAngleRight.Text  = '';
+                lblLsCropStatus.Text  = 'Not cropped';
+                cla(lsBinaryAx);  lsBinaryAx.Title.String = 'Binary (not yet computed)';
+                setappdata(fig, 'state', s);
+                renderLsFrame(s);
+                renderLsWindow(s);
+                postUpdate('Crop reset to full width. Draw a new crop line on the raw image, then double-click it to confirm.');
+            case 'drawing'
+                postUpdate('Redraw the crop line on the raw image, then double-click it to confirm.');
+            otherwise % 'idle'
+                postUpdate('Draw a line across the width to crop, on the raw (left) image, then double-click it to confirm.');
+        end
+        roi = drawline(dispAx, 'Color', [1 0.4 0], 'LineWidth', 1.5);
+        roi.DoubleClickedFcn = @(src,~) cb_lsCropConfirm(src);
+        s.lsCropROI   = roi;
+        s.lsCropPhase = 'drawing';
+        btnLsCrop.Text = 'Drawing... (dbl-click line)';
+        setappdata(fig, 'state', s);
+    end
+
+    % -------------------------------------------------------------------------
+    function cb_lsCropConfirm(roi)
+    % DoubleClickedFcn of the crop ROI: reads its X-extent, applies the crop
+    % across the whole dataset, and regenerates raw/binary from it.
+        s = getappdata(fig, 'state');
+        pos = roi.Position;         % [x1 y1; x2 y2], axes (data) coordinates
+        xs  = sort(pos(:,1));
+        nSpOrig = size(s.lsRaw, 2);
+        x0 = max(1,       round(xs(1)));
+        x1 = min(nSpOrig, round(xs(2)));
+        delete(roi);
+        if (x1 - x0) < 4
+            s.lsCropPhase = 'idle';
+            s.lsCropROI   = [];
+            btnLsCrop.Text = 'Crop (width)';
+            setappdata(fig, 'state', s);
+            postUpdate('Crop region too small - ignored. Click Crop to try again.');
+            return;
+        end
+        s.lsCropRange = [x0 x1];
+        s = regenLsRawLine(s);
+        s.lsCropPhase     = 'applied';
+        s.lsCropROI       = [];
+        s.lsBinarised     = false;  s.lsBinaryLine = [];
+        s.lsAngleChecked  = false;
+        s.lsRBCActive     = false;
+        s.lsCurrentWin    = min(s.lsCurrentWin, s.lsNumWins);
+        sldLsThresh.Enable = 'off';
+        btnLsRBC.Enable    = 'off';
+        lblLsRBCStatus.Text      = 'Off';
+        lblLsRBCStatus.FontColor = [0.45 0.45 0.45];
+        lblLsRBCResult.Text      = '';
+        lblLsRBCResult.Visible   = 'off';
+        lblLsAngleResult.Text = '';
+        lblLsAngleRight.Text  = '';
+        btnLsCrop.Text = 'Crop applied (click to redo)';
+        lblLsCropStatus.Text = sprintf('Cropped to px %d-%d of %d', x0, x1, nSpOrig);
+        cla(lsBinaryAx);  lsBinaryAx.Title.String = 'Binary (not yet computed)';
+        setappdata(fig, 'state', s);
+        renderLsFrame(s);
+        renderLsWindow(s);
+        postUpdate(sprintf(['Crop applied: spatial px %d-%d (of %d original). ' ...
+            'Raw/binary regenerated - re-binarise before running analysis.'], x0, x1, nSpOrig));
+    end
+
+    % -------------------------------------------------------------------------
+    function cb_lsGo()
+    % Full sliding-window linescan analysis: velocity, haematocrit, RBC flux.
+    % Runs live: resets the LHS to frame 1 / window 1, then steps the raw/
+    % binary/window displays through the data in sync with the loop while
+    % the three RHS traces grow window-by-window - same live pattern as the
+    % xyDiam analysis in cb_go (Kira Shaw with Claude Code, Aug 2026).
+        s = getappdata(fig, 'state');
+        if isempty(s.lsRawLine)
+            uialert(fig, 'Load a linescan file first.', 'No data'); return;
+        end
+        if ~s.lsBinarised || isempty(s.lsBinaryLine)
+            uialert(fig, 'Binarise the image first (click Binarise).', 'Binarise First');
+            return;
+        end
+
+        % Lock every interactive LHS control for the run: this function calls
+        % drawnow repeatedly (for the live view), and drawnow processes any
+        % QUEUED UI event - a leftover slider-drag callback fired reentrantly
+        % mid-run would call setappdata with its own (stale) state, silently
+        % overwriting the current window/frame this loop just set, right in
+        % the middle of the analysis. That reentrancy is what produced the
+        % "window label says 1, but the rectangle/frame title are somewhere
+        % else" symptom seen on screen - disabling inputs for the duration
+        % removes the trigger rather than chasing the exact interleaving.
+        % Re-enabled in the 'restore' block once the run finishes (Kira Shaw
+        % with Claude Code, Aug 2026).
+        lsCtrls = [lsFrameSlider, lsWinVertSlider, lsWinSlider, btnLsCheckAngle, ...
+            btnLsBinarise, btnLsCrop, btnLsRBC, sldLsThresh, efLsWinSz, ...
+            chkLsCharpak, btnLsGo];
+        for h = lsCtrls, h.Enable = 'off'; end
+        cleanupCtrls = onCleanup(@() set(lsCtrls, 'Enable', 'on'));
+
+        RL      = s.lsRawLine;          % [nSp x (nT*nF)]
+        BL      = double(~s.lsBinaryLine);  % 1=dark (RBC), 0=plasma
+        winPx   = s.lsWindowSz_px;
+        stepPx  = s.lsStepSz_px;
+        nWins   = s.lsNumWins;
+        mspline = s.lsMspline;           % ms per scan line
+        nSp     = s.lsNumSpatial;        % spatial pixels
+        nT      = s.lsNumTime;           % scan reps per frame (LHS frame sync)
+        pxsz    = s.lsPxsz;
+
+        % deltax: total spatial extent of one scan line in mm (used for
+        % Vscan, which is a whole-line rate: total width / total line time)
+        if ~isnan(pxsz) && pxsz > 0
+            deltax = (nSp-1) * pxsz / 1000;
+            pxsz_mm = pxsz / 1000;   % per-pixel spatial size, mm
+        else
+            deltax = (nSp-1) * 1e-3;
+            pxsz_mm = 1e-3;
+        end
+
+        Vscan = NaN;
+        if ~isnan(mspline) && mspline > 0
+            Vscan = deltax / (mspline/1000);
+        end
+
+        vel_app  = NaN(nWins, 1);
+        hct      = NaN(nWins, 1);
+        flux_rbc = NaN(nWins, 1);
+        nTotCols = size(RL, 2);
+
+        % Time axis is purely a function of window index/step/mspline (not of
+        % the pixel data), so the full X vector is known upfront - like
+        % frameVec in cb_go, only the Y values fill in live below.
+        kk     = (1:nWins)';
+        c0v    = 1 + (kk-1)*stepPx;
+        time_s = (c0v + winPx/2 - 1) * mspline / 1000;
+
+        % ---- reset LHS back to frame 1 / window 1 before the run starts ----
+        s.lsCurrentFrame = 1;
+        s.lsCurrentWin   = 1;
+        lsFrameSlider.Value = 1;
+        lblLsFrame.Text     = sprintf('1 / %d', s.lsNumFrames);
+        lsWinSlider.Value   = 1;
+        lblLsWin.Text       = sprintf('Win 1 / %d', nWins);
+        % clear any stale angle-check line (was for a since-moved-away-from
+        % window) before it starts stepping through - same reasoning as the
+        % slider callbacks (Kira Shaw with Claude Code, Aug 2026)
+        s.lsAngleChecked      = false;
+        lblLsAngleResult.Text = '';
+        lblLsAngleRight.Text  = '';
+        renderLsFrame(s);
+        renderLsWindow(s);
+
+        % ---- pre-create the three live trace lines (NaN Y, full X) ---------
+        % Line traces only, no per-point markers; NaN values (noisy/skipped
+        % windows) naturally break the line rather than being interpolated.
+        for h = linescanResultsH, h.Visible = true; end
+
+        cla(lsVelAx);
+        hVel = plot(lsVelAx, time_s, NaN(nWins,1), '-', 'Color', [0.85 0.10 0.10], 'LineWidth', 1.3);
+        xlabel(lsVelAx, 'Time (s)');  ylabel(lsVelAx, 'Velocity (mm/s)');
+        title(lsVelAx, 'Red Blood Cell Velocity  (running...)');
+        grid(lsVelAx, 'on');
+
+        cla(lsHctAx);
+        hHct = plot(lsHctAx, time_s, NaN(nWins,1), '-', 'Color', [0.55 0.10 0.65], 'LineWidth', 1.3);
+        xlabel(lsHctAx, 'Time (s)');  ylabel(lsHctAx, 'Haematocrit (%)');
+        title(lsHctAx, 'Haematocrit');
+        grid(lsHctAx, 'on');
+
+        cla(lsFluxAx);
+        hFlux = plot(lsFluxAx, time_s, NaN(nWins,1), 'g-', 'LineWidth', 1.3);
+        xlabel(lsFluxAx, 'Time (s)');  ylabel(lsFluxAx, 'Flux (RBC/s)');
+        title(lsFluxAx, 'RBC Flux');
+        grid(lsFluxAx, 'on');
+
+        postUpdate('Running linescan analysis — please wait...');
+        drawnow;
+
+        winStep = max(1, round(nWins/100));   % ~100 live refreshes total
+
+        % Near-vertical Radon streaks (theta close to 0) give cot(theta) huge
+        % apparent-velocity values of either sign - these are almost always
+        % noise, not genuine ultra-fast readings, but the old guard
+        % (abs(sin(theta))>=1e-6) let essentially everything through. Left
+        % unfiltered, one such outlier could dominate the plot's Y-axis scale
+        % and, after the retrograde/anterograde correction below, sometimes
+        % land as a large NEGATIVE value - which is what made the trace
+        % appear to vanish/flip to a negative axis. A realistic degree floor
+        % rejects these at the source (Kira Shaw with Claude Code, Aug 2026).
+        thetaFloorDeg = 0.5;
+
+        for k = 1:nWins
+            c0 = 1 + (k-1)*stepPx;
+            c1 = c0 + winPx - 1;
+            if c1 > nTotCols, break; end
+
+            % Velocity: Radon on [winPx x nSp] (transpose from rawLine convention)
+            wd = double(RL(:, c0:c1))';  % [winPx x nSp]: time x spatial
+            if var(wd(:)) >= eps
+                wd = wd - mean(wd,1) - mean(wd,2) + mean(wd(:));
+
+                R_c = radon(wd, 0:179);
+                [~, idx_c] = max(var(R_c));
+                coarse = idx_c - 1;
+                R_f = radon(wd, coarse + (-3:0.1:3));
+                [~, idx_f] = max(var(R_f));
+                fine_ang   = coarse + (-3 + (idx_f-1)*0.1);
+                theta      = -1*(fine_ang - 90);
+
+                if abs(theta) >= thetaFloorDeg
+                    % theta (from radon on the raw PIXEL matrix) relates rows
+                    % to COLUMNS, i.e. cot(theta) is "rows per pixel-column" -
+                    % converting to a physical velocity needs the PER-PIXEL
+                    % spatial size (pxsz_mm), not the total line width
+                    % (deltax). Using deltax here was a longstanding bug
+                    % inflating every velocity by a factor of ~nSp (confirmed
+                    % against a synthetic streak of known true velocity - a
+                    % 300-pixel-wide test window came back within ~1-6% of
+                    % the true value once corrected, vs ~260-300x too high
+                    % before). Kira Shaw with Claude Code, Aug 2026.
+                    vel_app(k) = cot(theta*pi/180) * pxsz_mm / (mspline/1000);
+                end
+            end
+
+            % Haematocrit: % dark pixels in window
+            bw = BL(:, c0:c1);
+            hct(k) = 100 * sum(bw(:)) / numel(bw);
+
+            % Flux: transitions along centre spatial row (counting RBC passages)
+            ctr_row     = BL(round(nSp/2), c0:c1);
+            transitions = sum(diff(ctr_row) ~= 0);
+            win_dur_s   = winPx * mspline / 1000;
+            flux_rbc(k) = (transitions / 2) / max(win_dur_s, eps);
+
+            if mod(k, winStep) == 0 || k == nWins
+                % LHS: step raw/binary/window displays through the data as
+                % it's analysed (mirrors xyDiam's live per-frame view)
+                s.lsCurrentWin   = k;
+                win_c_abs        = c0 + round(winPx/2);
+                s.lsCurrentFrame = max(1, min(s.lsNumFrames, floor((win_c_abs-1)/nT) + 1));
+                lsFrameSlider.Value = s.lsCurrentFrame;
+                lblLsFrame.Text     = sprintf('%d / %d', s.lsCurrentFrame, s.lsNumFrames);
+                lsWinSlider.Value   = min(k, lsWinSlider.Limits(2));
+                lblLsWin.Text       = sprintf('Win %d / %d', k, nWins);
+                setappdata(fig, 'state', s);  % keep appdata in step with the
+                                               % loop, not just the pre-run
+                                               % snapshot (Kira Shaw with
+                                               % Claude Code, Aug 2026)
+                renderLsFrame(s);
+                renderLsWindow(s);
+
+                % RHS: grow the three traces with values computed so far
+                set(hVel,  'YData', vel_app);
+                set(hHct,  'YData', hct);
+                set(hFlux, 'YData', flux_rbc);
+                postUpdate(sprintf('Running linescan analysis: window %d / %d', k, nWins));
+                drawnow limitrate;
+            end
+        end
+
+        % Scan direction is established from the (now correctly pixel-scaled
+        % - see thetaFloorDeg/pxsz_mm above) apparent velocity's sign; the
+        % Charpak magnitude correction itself is OPT-IN via chkLsCharpak
+        % (default off/"parked") since its physical validity for this
+        % acquisition is unverified and it can legitimately NaN out most of
+        % the trace when Vscan isn't comfortably larger than the true
+        % velocity - see the conversation with Kira Shaw, Aug 2026, for the
+        % synthetic-streak validation that found/fixed the pixel-scaling bug
+        % and left the correction's own validity an open question.
+        fv = vel_app(isfinite(vel_app) & ~isnan(vel_app));
+        if isempty(fv)
+            scan_dir = 'undetermined';
+        elseif median(fv) < 0
+            scan_dir = 'anterograde';  vel_app = -vel_app;
+        elseif median(fv) > 0
+            scan_dir = 'retrograde';
+        else
+            scan_dir = 'undetermined';
+        end
+
+        applyCharpak = chkLsCharpak.Value;
+
+        % vel_corr_filtered: the scan-velocity correction WITH the Vscan-
+        % validity clamp (a window where vel_app>=Vscan is physically
+        % un-recoverable from this formula, so it's dropped) - this is the
+        % number actually reported when the correction is on. vel_corr_raw:
+        % the SAME formula WITHOUT that clamp, kept purely as a comparison
+        % trace showing what the correction does before invalid windows are
+        % removed (Kira Shaw with Claude Code, Aug 2026).
+        vel_corr_filtered = vel_app;
+        vel_corr_raw      = vel_app;
+        if applyCharpak && ~isnan(Vscan)
+            switch scan_dir
+                case 'retrograde'
+                    vel_corr_raw      = vel_app .* Vscan ./ max(Vscan - vel_app, eps);
+                    vel_corr_filtered = vel_corr_raw;
+                    vel_corr_filtered(vel_app >= Vscan) = NaN;
+                case 'anterograde'
+                    vel_corr_raw      = vel_app .* Vscan ./ (Vscan + vel_app);
+                    vel_corr_filtered = vel_corr_raw;
+                otherwise
+                    % 'undetermined' - no established direction to correct
+            end
+        end
+        % Once a scan direction is established, an individual window reading
+        % the opposite sign is a noisy/wrong outlier, not a real negative
+        % velocity. Velocity also can never be zero or below the noise
+        % floor - both enforced on every trace that gets reported/plotted
+        % (Kira Shaw with Claude Code, Aug 2026).
+        if any(strcmp(scan_dir, {'retrograde','anterograde'}))
+            vel_corr_filtered(vel_corr_filtered < 0) = NaN;
+        end
+        vel_corr_filtered(vel_corr_filtered < 0.1) = NaN;
+        vel_app(vel_app < 0.1) = NaN;
+
+        if applyCharpak
+            % Can legitimately NaN out most of the trace when Vscan isn't
+            % comfortably larger than the true velocity (see the checkbox's
+            % tooltip) - rather than silently report a near-empty result,
+            % fall back to the uncorrected apparent velocity when that
+            % happens, and say so on screen (Kira Shaw with Claude Code,
+            % Aug 2026).
+            nFiniteApp  = nnz(~isnan(vel_app));
+            nFiniteCorr = nnz(~isnan(vel_corr_filtered));
+            correctionCollapsed = nFiniteApp > 0 && nFiniteCorr < 0.2 * nFiniteApp;
+        else
+            correctionCollapsed = false;
+        end
+        % "Main" reported/exported value - the filtered correction when
+        % it's on and hasn't collapsed, otherwise the raw apparent velocity;
+        % this is also what the title's mean/SD/range describe, even when
+        % the extra comparison traces below are also plotted.
+        if applyCharpak && ~correctionCollapsed
+            vel_display = vel_corr_filtered;
+        else
+            vel_display = vel_app;
+        end
+
+        s.lsVelocity     = vel_display;
+        s.lsHct          = hct;
+        s.lsFlux         = flux_rbc;
+        s.lsTime         = time_s;
+        % Kept alongside the main reported value purely so Export data can
+        % also offer the raw/uncorrected velocity when the scan-velocity
+        % correction is on (Kira Shaw with Claude Code, Aug 2026).
+        s.lsVelApp        = vel_app;
+        s.lsApplyCharpak  = applyCharpak;
+        s.lsWinLineStart  = c0v;   % absolute start line index of each window
+        s.lsAnalysisRun  = true;
+        setappdata(fig, 'state', s);
+
+        % --- Finalize plots ---------------------------------------------------
+        % Light smoothing for the final display only (linescan data is
+        % noisy window-to-window) - a 5-window moving mean, NaN-aware so
+        % gaps (noisy/rejected windows) don't spread. The stored/exported
+        % values (s.lsVelocity/lsHct/lsFlux, set above) stay the raw
+        % per-window numbers - only what's drawn on screen is smoothed, and
+        % the title's mean/SD/range are computed from those same raw values,
+        % not the smoothed display line (Kira Shaw with Claude Code, Aug 2026).
+        smoothWin   = 5;
+        vel_smooth  = smoothdata(vel_app,  'movmean', smoothWin, 'omitnan');  % red - always the raw apparent velocity
+        hct_smooth  = smoothdata(hct,      'movmean', smoothWin, 'omitnan');
+        flux_smooth = smoothdata(flux_rbc, 'movmean', smoothWin, 'omitnan');
+
+        statsStr = @(x) sprintf('mean=%.2f   SD=%.2f   range=[%.2f, %.2f]', ...
+            mean(x,'omitnan'), std(x,'omitnan'), min(x,[],'omitnan'), max(x,[],'omitnan'));
+
+        set(hVel, 'YData', vel_smooth);
+        set(hHct,  'YData', hct_smooth);
+        title(lsHctAx, {'Haematocrit', statsStr(hct)});
+        set(hFlux, 'YData', flux_smooth);
+        title(lsFluxAx, {'RBC Flux', statsStr(flux_rbc)});
+
+        % When the scan-velocity correction is on, add the corrected traces
+        % alongside the raw one for direct comparison: yellow = corrected
+        % WITHOUT the Vscan-validity filter (shows what the formula does
+        % before invalid windows are removed), blue = corrected WITH that
+        % filter (the number actually reported/exported). cla(lsVelAx) at
+        % the top of this function already clears any from a previous run.
+        if applyCharpak
+            vel_corr_raw_smooth      = smoothdata(vel_corr_raw,      'movmean', smoothWin, 'omitnan');
+            vel_corr_filtered_smooth = smoothdata(vel_corr_filtered, 'movmean', smoothWin, 'omitnan');
+            hold(lsVelAx, 'on');
+            plot(lsVelAx, time_s, vel_corr_raw_smooth, '-', ...
+                'Color', [0.85 0.65 0.05], 'LineWidth', 1.1);
+            plot(lsVelAx, time_s, vel_corr_filtered_smooth, '-', ...
+                'Color', [0.10 0.35 0.85], 'LineWidth', 1.5);
+            hold(lsVelAx, 'off');
+            legend(lsVelAx, {'Apparent (uncorrected)', 'Vscan-corrected (unfiltered)', ...
+                'Vscan-corrected (filtered)'}, 'Location', 'best', 'FontSize', F(7));
+        else
+            legend(lsVelAx, 'off');
+        end
+        title(lsVelAx, {'Red Blood Cell Velocity', statsStr(vel_display)});
+        drawnow;
+
+        btnExportFig.Enable = 'on';
+        btnExport.Enable    = 'on';
+
+        if correctionCollapsed
+            postUpdate(sprintf(['Linescan analysis complete: %d windows, scan direction = %s, ' ...
+                'Vscan = %.0f mm/s. Scan-velocity correction left only %d/%d windows valid ' ...
+                '(Vscan too close to measured velocity) - reporting uncorrected apparent ' ...
+                'velocity instead.'], nWins, scan_dir, Vscan, nFiniteCorr, nFiniteApp));
+        else
+            postUpdate(sprintf(['Linescan analysis complete: %d windows, ' ...
+                'scan direction = %s, Vscan = %.0f mm/s'], ...
+                nWins, scan_dir, Vscan));
+        end
+    end
+
+    % -------------------------------------------------------------------------
+    function cb_lsExport()
+    % Export data for linescan: MAT file or Excel, matching the pattern of
+    % cb_export/cb_zExport. Includes alignment columns (absolute line index,
+    % window index, derived frame index, time) plus raw and 5-window-
+    % smoothed traces for velocity/haematocrit/flux. If the scan-velocity
+    % correction was on for this run, also includes the uncorrected
+    % apparent velocity alongside the (corrected) main value (Kira Shaw
+    % with Claude Code, Aug 2026).
+        s = getappdata(fig, 'state');
+        if ~s.lsAnalysisRun
+            postUpdate('User needs to extract data first');  return;
+        end
+
+        choice = uiconfirm(fig, 'Choose export format:', 'Export', ...
+            'Options',       {'MAT file', 'Excel (.xlsx)', 'Cancel'}, ...
+            'DefaultOption', 1, 'CancelOption', 3);
+        if strcmp(choice, 'Cancel'), return; end
+
+        nWins   = numel(s.lsTime);
+        nT      = s.lsNumTime;
+        winPx   = s.lsWindowSz_px;
+        lineNo   = s.lsWinLineStart(:);
+        windowNo = (1:nWins)';
+        winCentreAbs = lineNo + round(winPx/2);
+        frameNo = max(1, min(s.lsNumFrames, floor((winCentreAbs-1)/nT) + 1));
+        timeS   = s.lsTime(:);
+
+        smoothWin   = 5;
+        vel_smooth  = smoothdata(s.lsVelocity, 'movmean', smoothWin, 'omitnan');
+        hct_smooth  = smoothdata(s.lsHct,      'movmean', smoothWin, 'omitnan');
+        flux_smooth = smoothdata(s.lsFlux,     'movmean', smoothWin, 'omitnan');
+
+        % Column name reflects what the "main" value actually is - avoids an
+        % ambiguous "RBCV_mm_s" that would silently mean different things
+        % depending on whether the correction was on for this run.
+        if s.lsApplyCharpak
+            velColName   = 'RBCV_VscanCorrected_mm_s';
+            velAppSmooth = smoothdata(s.lsVelApp, 'movmean', smoothWin, 'omitnan');
+        else
+            velColName = 'RBCV_mm_s';
+        end
+
+        if strcmp(choice, 'MAT file')
+            [fn, fp] = uiputfile('*.mat', 'Save MAT file', ...
+                fullfile(s.expDir, 'MAPS_linescan_results.mat'));
+            if isequal(fn,0), return; end
+            results.lineNo   = lineNo;
+            results.windowNo = windowNo;
+            results.frameNo  = frameNo;
+            results.time_s   = timeS;
+            results.(velColName)                = s.lsVelocity(:);
+            results.([velColName '_smoothed5'])  = vel_smooth(:);
+            results.Haematocrit_pct              = s.lsHct(:);
+            results.Haematocrit_pct_smoothed5    = hct_smooth(:);
+            results.Flux_RBC_s                   = s.lsFlux(:);
+            results.Flux_RBC_s_smoothed5         = flux_smooth(:);
+            if s.lsApplyCharpak
+                results.RBCV_uncorrected_mm_s           = s.lsVelApp(:);
+                results.RBCV_uncorrected_mm_s_smoothed5 = velAppSmooth(:);
+            end
+            results.windowSize_ms        = s.lsWindowSz_ms;
+            results.pixelSize_um         = s.lsPxsz;
+            results.applyVscanCorrection = s.lsApplyCharpak;
+            save(fullfile(fp,fn), 'results', '-v7.3');
+            postUpdate(['Saved: ' fullfile(fp,fn)]);
+
+        else  % Excel
+            [fn, fp] = uiputfile('*.xlsx', 'Save Excel file', ...
+                fullfile(s.expDir, 'MAPS_linescan_results.xlsx'));
+            if isequal(fn,0), return; end
+
+            colNames = [{'Line_number'}, {'Window_number'}, {'Frame_number'}, {'Time_s'}, ...
+                {velColName}, {[velColName '_smoothed5']}, ...
+                {'Haematocrit_pct'}, {'Haematocrit_pct_smoothed5'}, ...
+                {'Flux_RBC_s'}, {'Flux_RBC_s_smoothed5'}];
+            data = [lineNo, windowNo, frameNo, timeS, ...
+                s.lsVelocity(:), vel_smooth(:), s.lsHct(:), hct_smooth(:), ...
+                s.lsFlux(:), flux_smooth(:)];
+
+            if s.lsApplyCharpak
+                colNames = [colNames, {'RBCV_uncorrected_mm_s'}, {'RBCV_uncorrected_mm_s_smoothed5'}];
+                data = [data, s.lsVelApp(:), velAppSmooth(:)];
+            end
+
+            T = array2table(data, 'VariableNames', colNames);
+            outFn = fullfile(fp, fn);
+            if isfile(outFn)
+                delete(outFn);
+            end
+            writetable(T, outFn);
+            postUpdate(['Saved: ' outFn]);
+        end
+    end
+
+    % -------------------------------------------------------------------------
+    function cb_lsExportFig()
+    % Pops the three linescan result graphs out into a standalone,
+    % savable figure - same pattern as cb_exportFig/cb_zExportFig for the
+    % other two analysis types (Kira Shaw with Claude Code, Aug 2026).
+        s = getappdata(fig, 'state');
+        if ~s.lsAnalysisRun
+            postUpdate('User needs to extract data first');  return;
+        end
+
+        statsStr = @(x) sprintf('mean=%.2f   SD=%.2f   range=[%.2f, %.2f]', ...
+            mean(x,'omitnan'), std(x,'omitnan'), min(x,[],'omitnan'), max(x,[],'omitnan'));
+        smoothWin = 5;
+
+        expFig = figure('Name', 'MAPS — Linescan Export', 'Color', 'w', ...
+            'Position', [80 80 1100 850]);
+
+        ax1 = subplot(3, 1, 1, 'Parent', expFig);
+        plot(ax1, s.lsTime, smoothdata(s.lsVelocity, 'movmean', smoothWin, 'omitnan'), ...
+            '-', 'Color', [0.85 0.10 0.10], 'LineWidth', 1.5);
+        xlabel(ax1, 'Time (s)');  ylabel(ax1, 'Velocity (mm/s)');
+        title(ax1, {'Red Blood Cell Velocity', statsStr(s.lsVelocity)});
+        grid(ax1, 'on');
+
+        ax2 = subplot(3, 1, 2, 'Parent', expFig);
+        plot(ax2, s.lsTime, smoothdata(s.lsHct, 'movmean', smoothWin, 'omitnan'), ...
+            '-', 'Color', [0.55 0.10 0.65], 'LineWidth', 1.5);
+        xlabel(ax2, 'Time (s)');  ylabel(ax2, 'RBC density (%)');
+        title(ax2, {'Haematocrit', statsStr(s.lsHct)});
+        grid(ax2, 'on');
+
+        ax3 = subplot(3, 1, 3, 'Parent', expFig);
+        plot(ax3, s.lsTime, smoothdata(s.lsFlux, 'movmean', smoothWin, 'omitnan'), ...
+            '-', 'Color', [0.10 0.55 0.10], 'LineWidth', 1.5);
+        xlabel(ax3, 'Time (s)');  ylabel(ax3, 'Flux (RBC/s)');
+        title(ax3, {'RBC Flux', statsStr(s.lsFlux)});
+        grid(ax3, 'on');
+
+        [fn, fp] = uiputfile( ...
+            {'*.png','PNG image'; '*.pdf','PDF'; '*.fig','MATLAB figure'}, ...
+            'Save figure', fullfile(s.expDir, 'MAPS_linescan_figure'));
+        if ~isequal(fn, 0)
+            saveas(expFig, fullfile(fp, fn));
+            postUpdate(['Figure saved: ' fullfile(fp, fn)]);
+        end
+    end
+
 end % MAPS
 
 % =============================================================================
@@ -3357,6 +5060,29 @@ end
 end
 
 % Written by Kira Shaw with Claude Code, Aug 2026.
+function [n, runStart, runEnd] = countEdgeDarkRuns(edgeBlock)
+% countEdgeDarkRuns  Count RBC crossings of a linescan window edge.
+% edgeBlock: [winPx x edgeW] binary block (true=bright/plasma) taken from
+% one edge (left or right) of a binarised space-time window. Majority-votes
+% across the edgeW columns per row to get one bright/dark value per time
+% row, then counts contiguous dark runs - each run = one RBC crossing.
+% Runs touching row 1 or the last row are kept regardless of length (they're
+% truncated by the window boundary, not necessarily short); interior runs
+% need >=2 rows to reject single-pixel salt noise.
+%OUTPUTS
+% n                : number of qualifying dark runs
+% runStart, runEnd : row indices (into edgeBlock) of each run's start/end
+    edgeBright = mean(double(edgeBlock), 2) >= 0.5;
+    dark = ~edgeBright;
+    d = diff([0; dark; 0]);
+    runStart = find(d == 1);
+    runEnd   = find(d == -1) - 1;
+    touchesEdge = (runStart == 1) | (runEnd == numel(dark));
+    keep = touchesEdge | (runEnd - runStart + 1) >= 2;
+    runStart = runStart(keep);  runEnd = runEnd(keep);
+    n = numel(runStart);
+end
+
 function p = pctileLocal(x, pct)
 % pctileLocal  Percentile(s) of x via linear interpolation on the empirical
 % CDF (same convention as MATLAB's own prctile) - written locally so this
