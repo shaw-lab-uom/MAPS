@@ -4,7 +4,7 @@ A MATLAB GUI for two-photon microvascular imaging analysis: vessel diameter over
 
 ![MAPS logo](images/MAPSlogo.png)
 
-See `example_MAPSGUI_xyDiam.mp4` and `example_MAPSGUI_zstack.mp4` for videos of the GUI in use (recorded live on a laptop, sped up 4×) — one per analysis type; no linescan video yet.
+See `example_MAPSGUI_xyDiam.mp4`, `example_MAPSGUI_linescan.mp4`, `example_MAPSGUI_zstack.mp4`, and `example_MAPSGUI_perivascCa.mp4` for videos of the GUI in use (recorded live on a laptop, sped up 4×) — one per analysis type, plus one covering the Perivascular Calcium option within xyDiam.
 
 ## Contents
 
