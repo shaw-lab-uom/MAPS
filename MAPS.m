@@ -151,7 +151,7 @@ btnLoad = uibutton(pnlSetup, ...
 
 % ---- Vessel display axes ----------------------------------------------------
 lblDisplayHeader = uilabel(fig, 'Position', P(LX,684,250,18), ...
-    'Text', 'Vessel display  (frame ~50)', ...
+    'Text', 'Vessel display', ...
     'FontSize', F(10), 'FontColor', [0.35 0.35 0.35]);
 
 % ---- Slant-correct (zstack only - Written by Kira Shaw with Claude Code,
@@ -222,51 +222,94 @@ lblZFrame = uilabel(fig, ...
 % Boxed to match the zstack side's Preprocessing panel (Written by Kira
 % Shaw with Claude Code, Aug 2026) - same native-title/border/tint
 % treatment, just for consistency between the two modes.
-% Grown downward by 34px (96->130px tall, y 212->178) to fit the new
-% Perivascular Calcium row below Draw-branch - grown DOWN rather than up
-% since there's only ~12px clear above (to dispAx's bottom edge) but ~80px
-% free below (down to the Parameters panel), so the existing rows are
-% shifted up within the taller panel to make room at the bottom, and the
-% panel's own top edge - and dispAx's clearance from it - is unchanged
+% Grown downward by 34px (96->130px tall, y 212->178), then a further 36px
+% (130->166px tall, y 178->142) to fit the calcium normalisation row below
+% (BG ring / r / baseline window - see cb_go) - grown DOWN both times
+% since there's only ~12px clear above (to dispAx's bottom edge), but the
+% shared Parameters panel below only starts at y=142, leaving genuine free
+% space there in xyDiam mode specifically (that gap is normally used by
+% Parameters' zstack sibling, pnlPreprocessing, which is hidden here).
+% Existing rows shifted up within the taller panel each time so the
+% panel's own top edge - and dispAx's clearance from it - stays unchanged
 % (Kira Shaw with Claude Code, Aug 2026).
 pnlProcOptions = uipanel(fig, ...
-    'Position',        P(LX,178,LW,130), ...
+    'Position',        P(LX,142,LW,166), ...
     'Title',           'Preprocessing', ...
     'FontWeight',      'bold', ...
     'BackgroundColor', [0.97 0.97 0.98]);
 
 btnSkel = uibutton(pnlProcOptions, ...
-    'Position',        P(LX,78,172,28), ...
+    'Position',        P(LX,114,172,28), ...
     'Text',            'Generate skeleton', ...
     'FontSize',        F(11), ...
     'ButtonPushedFcn', @(~,~) cb_generateSkeleton());
 
-lblSkelTick = uilabel(pnlProcOptions, 'Position', P(188,76,30,30), ...
+lblSkelTick = uilabel(pnlProcOptions, 'Position', P(188,112,30,30), ...
     'Text', '', 'FontSize', F(20), 'FontColor', [0.10 0.70 0.20]);
 
 btnBranch = uibutton(pnlProcOptions, ...
-    'Position',        P(LX,42,210,28), ...
+    'Position',        P(LX,78,210,28), ...
     'Text',            'Draw around vessel branch', ...
     'FontSize',        F(11), ...
     'ButtonPushedFcn', @(~,~) cb_drawBranch());
 
-lblBranchTick = uilabel(pnlProcOptions, 'Position', P(226,40,30,30), ...
+lblBranchTick = uilabel(pnlProcOptions, 'Position', P(226,76,30,30), ...
     'Text', '', 'FontSize', F(20), 'FontColor', [0.10 0.70 0.20]);
 
 % Perivascular calcium (optional second channel/TIF) - ticking prompts for
-% a second TIF file to associate with this recording; what's actually done
-% with it analysis-wise is still being worked out, this is just getting
-% the file association ready (Kira Shaw with Claude Code, Aug 2026).
+% a second TIF file to associate with this recording (Kira Shaw with
+% Claude Code, Aug 2026).
 chkPerivascularCa = uicheckbox(pnlProcOptions, ...
-    'Position',        P(LX,8,220,22), ...
+    'Position',        P(LX,44,220,22), ...
     'Text',            'Perivascular Calcium', ...
     'Value',           false, 'FontSize', F(11), ...
     'ValueChangedFcn', @(src,~) cb_perivascularCaChanged(src));
 
+% Calcium-line pixel lengths (Written by Kira Shaw with Claude Code, Aug
+% 2026) - how far the perivascular sampling line extends either side of
+% each FWHM-detected vessel edge, matching prefs.insidePx/outsidePx from
+% FWHM_diam_perivascCa_adapted.m (defaults 10/20 there). Always editable,
+% not just once ticked - so the values are already right by the time the
+% user does tick the box.
+lblCaIn = uilabel(pnlProcOptions, 'Position', P(232,45,42,20), ...
+    'Text', 'In (px):', 'FontSize', F(9), 'FontColor', [0.25 0.25 0.25]);
+efCaInsidePx = uieditfield(pnlProcOptions, 'numeric', ...
+    'Position', P(274,43,32,22), ...
+    'Value',    10, 'Limits', [0 Inf], 'FontSize', F(9));
+lblCaOut = uilabel(pnlProcOptions, 'Position', P(310,45,48,20), ...
+    'Text', 'Out (px):', 'FontSize', F(9), 'FontColor', [0.25 0.25 0.25]);
+efCaOutsidePx = uieditfield(pnlProcOptions, 'numeric', ...
+    'Position', P(358,43,32,22), ...
+    'Value',    20, 'Limits', [0 Inf], 'FontSize', F(9));
+
+% Calcium normalisation row (Written by Kira Shaw with Claude Code, Aug
+% 2026) - Suite2p-style dF/F0: a further-out background ring (sampled the
+% same way as In/Out above, but starting where the Out ring ends) is
+% subtracted with coefficient r (Suite2p's own default neuropil
+% coefficient, neucoeff = 0.7), then a sliding maximin filter over the
+% baseline window gives F0 for dF/F0 = (F-F0)/F0. See cb_go for the actual
+% computation and the README for the write-up/references.
+lblCaBg = uilabel(pnlProcOptions, 'Position', P(LX,9,74,20), ...
+    'Text', 'BG ring (px):', 'FontSize', F(9), 'FontColor', [0.25 0.25 0.25]);
+efCaBgRingPx = uieditfield(pnlProcOptions, 'numeric', ...
+    'Position', P(84,7,30,22), ...
+    'Value',    15, 'Limits', [0 Inf], 'FontSize', F(9));
+lblCaBgCoeff = uilabel(pnlProcOptions, 'Position', P(120,9,16,20), ...
+    'Text', 'r:', 'FontSize', F(9), 'FontColor', [0.25 0.25 0.25]);
+efCaBgCoeff = uieditfield(pnlProcOptions, 'numeric', ...
+    'Position', P(136,7,32,22), ...
+    'Value',    0.7, 'Limits', [0 Inf], 'FontSize', F(9));
+lblCaBaseline = uilabel(pnlProcOptions, 'Position', P(174,9,66,20), ...
+    'Text', 'Baseline (s):', 'FontSize', F(9), 'FontColor', [0.25 0.25 0.25]);
+efCaBaselineSec = uieditfield(pnlProcOptions, 'numeric', ...
+    'Position', P(240,7,36,22), ...
+    'Value',    60, 'Limits', [1 Inf], 'FontSize', F(9));
+
 % group of xyDiam-only left-panel controls, shown/hidden as one by the
 % Analysis dropdown (see cb_analysisChanged)
 xyDiamLeftH = [pnlProcOptions, btnSkel, lblSkelTick, btnBranch, lblBranchTick, ...
-    chkPerivascularCa];
+    chkPerivascularCa, lblCaIn, efCaInsidePx, lblCaOut, efCaOutsidePx, ...
+    lblCaBg, efCaBgRingPx, lblCaBgCoeff, efCaBgCoeff, lblCaBaseline, efCaBaselineSec];
 
 % ---- Preprocessing panel (zstack) ------------------------------------------
 % Written by Kira Shaw with Claude Code, Aug 2026.
@@ -697,6 +740,11 @@ lblUpdatesError = uilabel(fig, ...
     'Visible',          'off');
 
 % ---- Diameter heatmap axes (xyDiam) -------------------------------------------
+% Built at their original (pre-calcium-feature) full size; only shrunk to
+% make room for the calcium trace plot (caAx) when Perivascular Calcium is
+% actually ticked - see applyCaLayout() - so the calcium feature costs no
+% screen real estate at all until it's switched on (Written by Kira Shaw
+% with Claude Code, Aug 2026).
 lblHeatmap = uilabel(fig, 'Position', P(RX,708,350,18), ...
     'Text', 'Diameter map', ...
     'FontSize', F(10), 'FontWeight', 'bold', 'FontColor', [0.25 0.25 0.25]);
@@ -708,6 +756,10 @@ colormap(heatAx, 'parula');
 xlabel(heatAx, 'Frame');  ylabel(heatAx, 'Skeleton pt');
 
 % ---- Average diameter trace axes (xyDiam) -------------------------------------
+% Default y-axis label set here (not just inside cb_go) so it's not blank/
+% unaligned with the other plots before Run has ever been pressed - cb_go
+% still overwrites it with the correct unit (microns/pixels) once pixel
+% size is known (Kira Shaw with Claude Code, Aug 2026).
 lblTrace = uilabel(fig, 'Position', P(RX,393,350,18), ...
     'Text', 'Average diameter  (mean across skeleton pts)', ...
     'FontSize', F(10), 'FontWeight', 'bold', 'FontColor', [0.25 0.25 0.25]);
@@ -715,9 +767,32 @@ traceAx = uiaxes(fig, 'Position', P(RX,55,RW,335));
 traceAx.Color  = [0.97 0.97 0.97];
 traceAx.XColor = [0.30 0.30 0.30];
 traceAx.YColor = [0.30 0.30 0.30];
+xlabel(traceAx, 'Frame');  ylabel(traceAx, 'Diameter (microns)');
 hold(traceAx, 'on');
 
-% group of xyDiam-only right-panel content, shown/hidden as one
+% ---- Perivascular calcium trace axes (xyDiam) ----------------------------------
+% Written by Kira Shaw with Claude Code, Aug 2026. Branch-by-branch, colour
+% -coded the same way as traceAx above - only populated with real data when
+% Perivascular Calcium is ticked and run (see cb_go). Hidden by default
+% (Visible off, and deliberately left OUT of xyDiamRightH below) so it
+% takes no space in the live view unless the box is actually ticked - see
+% applyCaLayout(), called from cb_perivascularCaChanged and
+% cb_analysisChanged, which is what shows/positions it and shrinks
+% heatAx/traceAx to make room.
+lblCaTrace = uilabel(fig, 'Position', P(RX,254,350,18), ...
+    'Text', 'Perivascular calcium  (mean across skeleton pts)', ...
+    'FontSize', F(10), 'FontWeight', 'bold', 'FontColor', [0.25 0.25 0.25], ...
+    'Visible', 'off');
+caAx = uiaxes(fig, 'Position', P(RX,55,RW,197), 'Visible', 'off');
+caAx.Color  = [0.97 0.97 0.97];
+caAx.XColor = [0.30 0.30 0.30];
+caAx.YColor = [0.30 0.30 0.30];
+title(caAx, 'Perivascular Calcium (not enabled)');
+hold(caAx, 'on');
+
+% group of xyDiam-only right-panel content, shown/hidden as one - lblCaTrace/
+% caAx deliberately excluded (see comment above); their visibility is
+% managed separately by applyCaLayout()
 xyDiamRightH = [lblHeatmap, heatAx, lblTrace, traceAx];
 
 % ---- Threshold segments table (zstack) ---------------------------------------
@@ -955,8 +1030,18 @@ btnExportFig = uibutton(fig, ...
 state.rawVess       = [];
 state.expDir        = '';
 state.frame50       = [];
-state.perivascularCaPath = '';  % xyDiam: optional second TIF (perivascular
-                                 % calcium) - path only for now, analysis TBD
+state.perivascularCaPath = '';  % xyDiam: optional second TIF (perivascular calcium)
+state.cont_calcium  = {};       % xyDiam: per-branch raw perivascular Ca trace (AU),
+                                 % aligned row-for-row with cont_diams (see cb_go)
+state.cont_calcium_bg     = {}; % xyDiam: per-branch background-ring trace (AU)
+state.cont_calcium_bgcorr = {}; % xyDiam: per-branch background-subtracted trace (AU)
+state.cont_calcium_dFF    = {}; % xyDiam: per-branch dF/F0 (Suite2p-style, see cb_go)
+state.caInsidePx    = 10;       % xyDiam: px inside vessel edge sampled for calcium
+state.caOutsidePx   = 20;       % xyDiam: px outside vessel edge sampled for calcium
+state.caBgRingPx    = 15;       % xyDiam: px width of the background ring beyond Out
+state.caBgCoeff     = 0.7;      % xyDiam: background subtraction coefficient r
+state.caBaselineSec = 60;       % xyDiam: dF/F0 sliding-baseline window, seconds
+state.caDarkFloor   = NaN;      % xyDiam: dark-offset floor subtracted from calcium (see cb_go)
 state.skeletons     = {};
 state.masks         = {};
 state.perpEndpts    = {};
@@ -1310,6 +1395,8 @@ setappdata(fig, 'state', state);
             s.frame50     = squeeze(rawVess(min(50, size(rawVess,1)), :, :));
             s.skeletons   = {};  s.masks     = {};
             s.perpEndpts  = {};  s.cont_diams = {};
+            s.cont_calcium = {};  s.cont_calcium_bg = {};
+            s.cont_calcium_bgcorr = {};  s.cont_calcium_dFF = {};
             s.skelDrawn   = false;  s.branchesDrawn = false;
             s.analysisRun = false;
             % A previously-associated perivascular calcium TIF belongs to
@@ -1317,6 +1404,8 @@ setappdata(fig, 'state', state);
             % over to a new one (Kira Shaw with Claude Code, Aug 2026).
             s.perivascularCaPath = '';
             chkPerivascularCa.Value = false;
+            cla(caAx);  title(caAx, 'Perivascular Calcium (not enabled)');
+            applyCaLayout(false);
             setappdata(fig, 'state', s);
 
             % show frame in display axes
@@ -1393,6 +1482,11 @@ setappdata(fig, 'state', state);
         for h = zstackLeftH,      h.Visible = isZ;                           end
         for h = linescanLeftH,    h.Visible = isLS;                          end
         for h = xyDiamRightH,     h.Visible = isXY;                         end
+        % lblCaTrace/caAx are deliberately outside xyDiamRightH (see where
+        % they're created) - their own visibility/size is calcium-tick-
+        % dependent, not just mode-dependent, so it's set separately here
+        % (Kira Shaw with Claude Code, Aug 2026).
+        applyCaLayout(isXY && chkPerivascularCa.Value);
         for h = zstackRightH,     h.Visible = isZ;                           end
         for h = linescanRightH,   h.Visible = isLS;                          end
         for h = linescanResultsH, h.Visible = (isLS && s.lsAnalysisRun);    end
@@ -1473,7 +1567,7 @@ setappdata(fig, 'state', state);
             dispAx.Position           = P(LX,320,LW,361);
             lsBinaryAx.Position       = P(RX,528,RW,186);
             lblDisplayHeader.Position = P(LX,684,250,18);
-            lblDisplayHeader.Text     = 'Vessel display  (frame ~50)';
+            lblDisplayHeader.Text     = 'Vessel display';
             lblDisplayHeader.Visible  = 'on';   % linescan mode hides this - restore it here
             lblLsBinaryHdr.Position   = P(RX,718,500,18);   % restore default
             lblLsFrameHdr.Position    = P(LX,    417,70,14);
@@ -2905,16 +2999,43 @@ setappdata(fig, 'state', state);
     end
 
     % -------------------------------------------------------------------------
+    function applyCaLayout(enabled)
+    % applyCaLayout  Shows/hides + resizes the calcium trace plot (caAx) and
+    % grows/shrinks heatAx/traceAx to match, so the calcium panel costs
+    % screen space only while it's actually in use - unticked, xyDiam's
+    % right-hand plots are exactly the size/position they were before the
+    % calcium feature existed (Written by Kira Shaw with Claude Code, Aug
+    % 2026). Called from cb_perivascularCaChanged (tick/untick) and
+    % cb_analysisChanged (so switching back into xyDiam mode restores
+    % whichever layout the checkbox currently calls for).
+        if enabled
+            heatAx.Position    = P(RX,509,RW,197);
+            lblTrace.Position  = P(RX,481,350,18);
+            traceAx.Position   = P(RX,282,RW,197);
+            lblCaTrace.Visible = 'on';
+            caAx.Visible       = 'on';
+        else
+            heatAx.Position    = P(RX,415,RW,290);
+            lblTrace.Position  = P(RX,393,350,18);
+            traceAx.Position   = P(RX,55,RW,335);
+            lblCaTrace.Visible = 'off';
+            caAx.Visible       = 'off';
+        end
+    end
+
+    % -------------------------------------------------------------------------
     function cb_perivascularCaChanged(src)
     % Ticking prompts for a second TIF (perivascular calcium) to associate
-    % with this recording - stores the path only for now; what's actually
-    % done with it analysis-wise is still to be worked out. Unticking
-    % clears the stored path rather than leaving it stale for a re-tick
-    % (Kira Shaw with Claude Code, Aug 2026).
+    % with this recording; the FWHM-edge sampling + dF/F0 pipeline (see
+    % cb_go) then runs on it once GO is pressed. Unticking clears the
+    % stored path rather than leaving it stale for a re-tick (Kira Shaw
+    % with Claude Code, Aug 2026).
         s = getappdata(fig, 'state');
         if ~src.Value
             s.perivascularCaPath = '';
             setappdata(fig, 'state', s);
+            cla(caAx);  title(caAx, 'Perivascular Calcium (not enabled)');
+            applyCaLayout(false);
             return;
         end
         startDir = s.expDir;
@@ -2929,12 +3050,18 @@ setappdata(fig, 'state', state);
             'Select perivascular calcium TIF file', startDir);
         if isequal(tifName, 0)
             src.Value = false;   % cancelled - revert the tick
+            applyCaLayout(false);
             return;
         end
         s.perivascularCaPath = fullfile(tifFolder, tifName);
         setappdata(fig, 'state', s);
-        postUpdate(['Perivascular calcium TIF selected: ' s.perivascularCaPath ...
-            '  (not yet used in analysis)']);
+        % Clear the "(not enabled)" placeholder as soon as a file is
+        % actually selected, rather than leaving it up until GO is pressed
+        % - it read as if the tick hadn't taken effect (Kira Shaw with
+        % Claude Code, Aug 2026).
+        title(caAx, '');
+        applyCaLayout(true);
+        postUpdate(['Perivascular calcium TIF selected: ' s.perivascularCaPath]);
     end
 
     % =========================================================================
@@ -2966,12 +3093,91 @@ setappdata(fig, 'state', state);
         imH        = size(s.rawVess, 2);
         imW        = size(s.rawVess, 3);
 
-        s.cont_diams = cell(nB, 1);
-        s.nanInds    = cell(nB, 1);
-        s.times      = cell(nB, 1);
-        s.perpEndpts = cell(nB, 1);
+        s.cont_diams   = cell(nB, 1);
+        s.nanInds      = cell(nB, 1);
+        s.times        = cell(nB, 1);
+        s.perpEndpts   = cell(nB, 1);
+        s.cont_calcium        = cell(nB, 1);
+        s.cont_calcium_bg     = cell(nB, 1);
+        s.cont_calcium_bgcorr = cell(nB, 1);
+        s.cont_calcium_dFF    = cell(nB, 1);
+        % export-fig only: representative-frame calcium sample pixels, kept
+        % as two separate per-edge lists (not merged) so the export figure
+        % can draw the two short edge segments separately - see Phase B
+        % below (Kira Shaw with Claude Code, Aug 2026).
+        s.caEdge1Locs = cell(nB, 1);
+        s.caEdge2Locs = cell(nB, 1);
+        s.caMeanImg    = [];
 
         cla(heatAx);  cla(traceAx);  hold(traceAx, 'on');
+
+        % ---- optional perivascular calcium channel (Written by Kira Shaw with
+        % Claude Code, Aug 2026) - ported from FWHM_diam_perivascCa_adapted.m's
+        % insidePx/outsidePx expansion either side of each FWHM vessel edge.
+        % Loaded once here (not per branch) since it's the same TIF for every
+        % branch in this recording; skipped with a posted reason rather than
+        % erroring out if the box isn't ticked, no file was chosen, or the
+        % calcium TIF doesn't match the vessel TIF's dimensions.
+        caEnabled = chkPerivascularCa.Value && ~isempty(s.perivascularCaPath) ...
+            && isfile(s.perivascularCaPath);
+        caInsidePx  = round(efCaInsidePx.Value);
+        caOutsidePx = round(efCaOutsidePx.Value);
+        caBgRingPx  = round(efCaBgRingPx.Value);
+        caBgCoeff   = efCaBgCoeff.Value;
+        caBaselineSec = efCaBaselineSec.Value;
+        rawCa = [];
+        caDarkFloor = NaN;
+        if caEnabled
+            postUpdate('Loading perivascular calcium TIF...');
+            drawnow;
+            rawCa = loadTifFileIn2Mat(s.perivascularCaPath);
+            if ~isequal(size(rawCa), size(s.rawVess))
+                postUpdate(sprintf(['Perivascular calcium TIF is %d x %d x %d but the ' ...
+                    'vessel TIF is %d x %d x %d - skipping calcium analysis.'], ...
+                    size(rawCa,1), size(rawCa,2), size(rawCa,3), nFrames, imH, imW));
+                caEnabled = false;
+            else
+                % ---- dark-offset floor (Written by Kira Shaw with Claude
+                % Code, Aug 2026) - raw PMT/detector counts are rarely
+                % true-zero at rest; a robust low percentile of the WHOLE
+                % recording (every pixel, every frame - not per-ROI, not
+                % per-frame) estimates that fixed floor and is subtracted
+                % here, before any background-ring/dF-F0 math downstream.
+                % Left uncorrected, a leftover offset dominates F0's
+                % denominator and dF/F0 comes out artificially tiny
+                % regardless of genuine signal changes (same pctileLocal
+                % helper already used for linescan's raw-line normalisation
+                % in cb_loadData, so this is a proven-scale operation).
+                postUpdate('Estimating perivascular calcium dark-offset floor...');
+                drawnow;
+                caDarkFloor = pctileLocal(double(rawCa(:)), 1);
+                rawCa = double(rawCa) - caDarkFloor;
+                rawCa(rawCa < 0) = 0;  % the floor estimate can slightly overshoot on some frames
+            end
+        elseif chkPerivascularCa.Value
+            postUpdate('Perivascular Calcium ticked but no valid TIF is selected - skipping calcium analysis.');
+        end
+        if caEnabled
+            % export-fig only: mean projection of the raw (unmasked) calcium
+            % channel, so the popout figure can show it the same way meanVess
+            % is shown for the vessel channel (Kira Shaw with Claude Code,
+            % Aug 2026).
+            s.caMeanImg = squeeze(mean(double(rawCa), 1));
+        end
+        cla(caAx);  hold(caAx, 'on');
+        if caEnabled
+            % dF/F0 (background-ring subtracted, sliding-baseline normalised -
+            % see the Suite2p-style computation in Phase B below) is the trace
+            % actually shown live/in the popout figure - it's the one that
+            % answers "how much brighter than its own resting level is this
+            % branch right now", which raw AU alone can't (Kira Shaw with
+            % Claude Code, Aug 2026). Raw/background/background-corrected are
+            % still all kept in the data export.
+            xlabel(caAx, 'Frame');  ylabel(caAx, 'Perivascular \DeltaF/F_0');
+            title(caAx, '');
+        else
+            title(caAx, 'Perivascular Calcium (not enabled)');
+        end
 
         % mean vessel image doesn't depend on branch — compute once, not per-branch
         meanVess = squeeze(mean(double(s.rawVess), 1));
@@ -3020,12 +3226,20 @@ setappdata(fig, 'state', state);
             normlength = ceil(roughdiam) * 2;
             prevAngle  = NaN;
 
-            % ---- mask vessel for intensity -----------------------------------
+            % ---- mask vessel (and, if enabled, calcium) for intensity --------
             maskVess = zeros(size(s.rawVess), 'single');
+            if caEnabled
+                maskCa = zeros(size(rawCa), 'single');
+            end
             for i = 1:nFrames
                 fr = single(squeeze(s.rawVess(i,:,:)));
                 fr(~mask) = NaN;
                 maskVess(i,:,:) = fr;
+                if caEnabled
+                    frCa = single(squeeze(rawCa(i,:,:)));
+                    frCa(~mask) = NaN;
+                    maskCa(i,:,:) = frCa;
+                end
             end
 
             % ===================================================================
@@ -3132,35 +3346,117 @@ setappdata(fig, 'state', state);
             ylabel(traceAx, ['Avg diam (' diamDisplay ')']);
             legend(traceAx, 'Location', 'best');
 
+            % ---- perivascular calcium: same [skeleton pt x frame] shape as
+            % cont_diam, sampled caInsidePx/caOutsidePx either side of each
+            % FWHM edge (see the loop below) - only allocated/plotted when
+            % the feature is actually enabled for this run.
+            if caEnabled
+                cont_calcium    = nan(nLines, nFrames, 'single');
+                cont_calcium_bg = nan(nLines, nFrames, 'single');
+                caY  = nan(1, nFrames);
+                hCa  = plot(caAx, frameVec, caY, '-', ...
+                    'Color', col, 'LineWidth', 1.8, ...
+                    'DisplayName', sprintf('Branch %d', b));
+                legend(caAx, 'Location', 'best');
+                % export-fig only: the actual sampled pixel locations, frozen
+                % at one representative frame (same frame roughdiam used
+                % above), kept as two separate per-edge lists rather than
+                % merged - lets the popout figure draw the two short edge
+                % segments separately, without having to store this every
+                % frame (Kira Shaw with Claude Code, Aug 2026).
+                caEdge1Locs = cell(nLines, 1);
+                caEdge2Locs = cell(nLines, 1);
+                repFrame    = min(10, nFrames);
+            end
+
             frameStep = max(1, round(nFrames/100));   % ~100 display refreshes total
 
             for i = 1:nFrames
                 ImVess = squeeze(maskVess(i,:,:));   % once per frame, not per skel pt
+                if caEnabled
+                    ImCa = squeeze(maskCa(i,:,:));
+                end
                 for k = 1:nLinesEff
                     locs = locsAll{k};
                     if isempty(locs), continue; end
-                    prof = ImVess(locs);
-                    prof = prof(~isnan(prof));
+                    prof   = ImVess(locs);
+                    valid  = ~isnan(prof);
+                    prof   = prof(valid);
                     if numel(prof) < 2, continue; end
                     hm = (min(prof) + max(prof)) / 2;
                     i1 = find(prof >= hm, 1, 'first');
                     i2 = find(prof >= hm, 1, 'last');
                     if ~isempty(i1) && ~isempty(i2)
                         cont_diam(k,i) = (i2 - i1) * pxsz_um;
+
+                        % ---- perivascular calcium (Written by Kira Shaw with
+                        % Claude Code, Aug 2026) - same edge-expansion as
+                        % FWHM_diam_perivascCa_adapted.m: caOutsidePx out to
+                        % caInsidePx in around edge 1, mirrored around edge 2.
+                        % locsNZ (locs filtered the same way as prof, via
+                        % 'valid') keeps i1/i2 correctly aligned to pixel
+                        % locations even on the rare line with an out-of-mask
+                        % NaN in it.
+                        if caEnabled
+                            locsNZ = locs(valid);
+                            % Kept as two separate ranges (not concatenated
+                            % first) so the representative-frame capture
+                            % below can store each edge's pixels separately
+                            % - the mean itself still pools both edges
+                            % together exactly as FWHM_diam_perivascCa_
+                            % adapted.m does (Kira Shaw with Claude Code,
+                            % Aug 2026).
+                            lineInd1 = (i1-caOutsidePx):(i1+caInsidePx);
+                            lineInd2 = (i2-caInsidePx):(i2+caOutsidePx);
+                            lineInd1(lineInd1 < 1 | lineInd1 > numel(locsNZ)) = [];
+                            lineInd2(lineInd2 < 1 | lineInd2 > numel(locsNZ)) = [];
+                            lineInd = [lineInd1, lineInd2];
+                            if ~isempty(lineInd)
+                                cont_calcium(k,i) = nanmean(ImCa(locsNZ(lineInd)));
+                                if i == repFrame
+                                    if ~isempty(lineInd1), caEdge1Locs{k} = locsNZ(lineInd1); end
+                                    if ~isempty(lineInd2), caEdge2Locs{k} = locsNZ(lineInd2); end
+                                end
+                            end
+
+                            % ---- background ring (Written by Kira Shaw with
+                            % Claude Code, Aug 2026) - Suite2p-style: a further
+                            % -out annulus, continuing straight on from where
+                            % the In/Out sampling above stops, used as a
+                            % common-mode background reference (see
+                            % cont_calcium_bgcorr/dF-F0 below, computed once
+                            % the whole trace is in).
+                            bgInd = [(i1-caOutsidePx-caBgRingPx):(i1-caOutsidePx-1), ...
+                                     (i2+caOutsidePx+1):(i2+caOutsidePx+caBgRingPx)];
+                            bgInd(bgInd < 1 | bgInd > numel(locsNZ)) = [];
+                            if ~isempty(bgInd)
+                                cont_calcium_bg(k,i) = nanmean(ImCa(locsNZ(bgInd)));
+                            end
+                        end
                     end
                 end
                 traceY(i) = nanmean(cont_diam(:,i));
+                if caEnabled
+                    caY(i) = nanmean(cont_calcium(:,i));
+                end
 
                 if mod(i,frameStep)==0 || i==nFrames
                     postUpdate(sprintf('Branch %d / %d:  frame %d / %d', b, nB, i, nFrames));
                     set(hHeat, 'CData', cont_diam);
                     xlim(heatAx, [0.5, i+0.5]);
                     set(hTrace, 'YData', traceY);
+                    if caEnabled
+                        set(hCa, 'YData', caY);
+                    end
                     drawnow limitrate;
                 end
             end
 
             s.perpEndpts{b} = perpEndpts;
+            if caEnabled
+                s.caEdge1Locs{b} = caEdge1Locs;
+                s.caEdge2Locs{b} = caEdge2Locs;
+            end
 
             % ---- remove all-NaN skeleton rows, build time vector ------------
             nanInd = find(all(isnan(cont_diam), 2));
@@ -3170,6 +3466,49 @@ setappdata(fig, 'state', state);
             s.cont_diams{b} = cont_diam;
             s.nanInds{b}    = nanInd;
             s.times{b}      = time;
+            if caEnabled
+                % same rows removed as cont_diam, so the two stay aligned
+                % skeleton-pt-for-skeleton-pt (see export functions)
+                cont_calcium(nanInd,:)    = [];
+                cont_calcium_bg(nanInd,:) = [];
+                s.cont_calcium{b}    = cont_calcium;
+                s.cont_calcium_bg{b} = cont_calcium_bg;
+
+                % ---- background-subtract, then dF/F0 (Written by Kira Shaw
+                % with Claude Code, Aug 2026) - Suite2p-style: F_bgcorr =
+                % F - r*F_bg, then F0 = a sliding 'maximin' baseline (Gaussian
+                % -smooth, sliding min, sliding max, all over the baseline
+                % window) of F_bgcorr, then dF/F0 = (F_bgcorr-F0)/F0. Done
+                % once per branch here (not per-frame above) since the
+                % sliding baseline needs the whole trace, not just frames
+                % seen so far - see slidingBaseline() at the bottom of this
+                % file.
+                cont_calcium_bgcorr = cont_calcium - caBgCoeff * cont_calcium_bg;
+                winFrames = max(3, round(caBaselineSec * fps_val));
+                F0        = slidingBaseline(cont_calcium_bgcorr, winFrames);
+                % dF/F0 itself is allowed to go slightly negative - normal
+                % noise around a resting baseline, seen throughout the
+                % calcium-imaging literature (a maximin baseline is a local
+                % minimum estimate, not a hard floor, so F dipping just
+                % below it briefly is expected and shouldn't be censored;
+                % doing so would asymmetrically discard only the negative
+                % half of ordinary noise and bias the reported mean
+                % upward). What DOES get excluded (Written by Kira Shaw with
+                % Claude Code, Aug 2026): frames/skeleton points where F0
+                % itself is <=0 - background-ring subtraction can legitimately
+                % push the background-corrected trace (and so its own
+                % baseline) non-positive for a stretch, at which point F0 is
+                % no longer a valid resting-fluorescence reference and
+                % dividing by it gives a huge, not-meaningfully-signed
+                % number rather than a real percentage change - same class
+                % of physical-floor guard as the linescan velocity noise
+                % floor elsewhere in this file.
+                cont_calcium_dFF = (cont_calcium_bgcorr - F0) ./ F0;
+                cont_calcium_dFF(F0 <= 0) = NaN;
+
+                s.cont_calcium_bgcorr{b} = cont_calcium_bgcorr;
+                s.cont_calcium_dFF{b}    = cont_calcium_dFF;
+            end
 
             % ---- finalize heatmap + trace for this branch (exact values) ----
             set(hHeat, 'CData', cont_diam);
@@ -3179,9 +3518,24 @@ setappdata(fig, 'state', state);
 
             set(hTrace, 'XData', frameVec, 'YData', nanmean(cont_diam, 1));
             xlim(traceAx, [1, nFrames]);
+            if caEnabled
+                % dF/F0 is the "best" trace to show live (see the ylabel note
+                % above) - the raw/running caY shown during the frame loop was
+                % only ever a placeholder, since dF/F0 needs the complete
+                % trace before its baseline can be computed.
+                set(hCa, 'XData', frameVec, 'YData', nanmean(cont_calcium_dFF, 1));
+                xlim(caAx, [1, nFrames]);
+            end
             drawnow;
 
         end % branch loop
+
+        s.caInsidePx    = caInsidePx;
+        s.caOutsidePx   = caOutsidePx;
+        s.caBgRingPx    = caBgRingPx;
+        s.caBgCoeff     = caBgCoeff;
+        s.caBaselineSec = caBaselineSec;
+        s.caDarkFloor   = caDarkFloor;
 
         % Restore display to vessel + all overlays after scan finishes
         refreshDisplay(s, s.skeletons, s.masks);
@@ -3225,13 +3579,24 @@ setappdata(fig, 'state', state);
             [fn, fp] = uiputfile('*.mat', 'Save MAT file', ...
                 fullfile(s.expDir, 'MAPS_results.mat'));
             if isequal(fn,0), return; end
-            results.cont_diams = s.cont_diams;
-            results.times      = s.times;
-            results.nanInds    = s.nanInds;
-            results.pxsz_um    = s.pxsz_um;
-            results.fps        = s.fps;
-            results.diamUnit   = s.diamUnit;
-            results.timeUnit   = s.timeUnit;
+            results.cont_diams   = s.cont_diams;
+            results.times        = s.times;
+            results.nanInds      = s.nanInds;
+            results.pxsz_um      = s.pxsz_um;
+            results.fps          = s.fps;
+            results.diamUnit     = s.diamUnit;
+            results.timeUnit     = s.timeUnit;
+            % Perivascular calcium - every stage of the pipeline kept, not
+            % just the dF/F0 shown live (empty cells/NaN if the feature
+            % wasn't used for this run). Written by Kira Shaw with Claude
+            % Code, Aug 2026 - see cb_go for how each is derived.
+            results.cont_calcium        = s.cont_calcium;         % raw AU
+            results.cont_calcium_bg     = s.cont_calcium_bg;      % background ring, AU
+            results.cont_calcium_bgcorr = s.cont_calcium_bgcorr;  % background-subtracted, AU
+            results.cont_calcium_dFF    = s.cont_calcium_dFF;     % dF/F0 (shown live)
+            for fld = {'caInsidePx','caOutsidePx','caBgRingPx','caBgCoeff','caBaselineSec','caDarkFloor'}
+                if isfield(s, fld{1}), results.(fld{1}) = s.(fld{1}); end
+            end
             save(fullfile(fp,fn), 'results', '-v7.3');
             postUpdate(['Saved: ' fullfile(fp,fn)]);
 
@@ -3285,6 +3650,33 @@ setappdata(fig, 'state', state);
                         'UniformOutput', false)];
                     data = [frmVec, timeSec, avgDiam, diamPx, cd_b'];
                 end
+
+                % ---- perivascular calcium columns, if this branch has them
+                % (Written by Kira Shaw with Claude Code, Aug 2026) - every
+                % stage of the pipeline (raw / background ring / background-
+                % subtracted / dF/F0), not just the dF/F0 shown live, so
+                % nothing here is only recoverable by rerunning the analysis.
+                % All aligned row-for-row with the diameter skeleton points
+                % above, since cb_go removes the same all-NaN rows from all
+                % of them.
+                if ~isempty(s.cont_calcium) && b <= numel(s.cont_calcium) ...
+                        && ~isempty(s.cont_calcium{b})
+                    caStages = { 'calcium',        'perivascular Ca (AU)',            s.cont_calcium{b};
+                                 'calciumBg',       'perivascular Ca bg ring (AU)',    s.cont_calcium_bg{b};
+                                 'calciumBgCorr',   'perivascular Ca bg-corrected (AU)', s.cont_calcium_bgcorr{b};
+                                 'calciumDFF',      'perivascular Ca dF/F0',           s.cont_calcium_dFF{b} };
+                    for r = 1:size(caStages,1)
+                        ca_b = double(caStages{r,3});
+                        if isempty(ca_b), continue; end
+                        avgCa = nanmean(ca_b, 1)';
+                        stageTag = caStages{r,1};
+                        colNames = [colNames, {['Avg ' caStages{r,2}]}, ...
+                            arrayfun(@(n) sprintf('SkelPt%02d_%s', n, stageTag), ...
+                            1:nSk, 'UniformOutput', false)];
+                        data = [data, avgCa, ca_b'];
+                    end
+                end
+
                 T = array2table(data, 'VariableNames', colNames);
 
                 branchFn = fullfile(fp, sprintf('%s_Branch%d%s', baseName, b, ext));
@@ -3317,17 +3709,44 @@ setappdata(fig, 'state', state);
         nB       = numel(s.cont_diams);
         diamLbl  = strrep(s.diamUnit, '\mum', 'microns');
         meanVess = squeeze(mean(double(s.rawVess), 1));
+        imH      = size(s.rawVess, 2);
+        imW      = size(s.rawVess, 3);
+
+        % Perivascular calcium was actually run for at least one branch this
+        % time (Written by Kira Shaw with Claude Code, Aug 2026) - only then
+        % does the figure grow a 4th panel for it, so exporting without the
+        % feature looks exactly as it always has.
+        caPresent = ~isempty(s.cont_calcium) && any(~cellfun(@isempty, s.cont_calcium));
 
         % ---- create export figure -------------------------------------------
         expFig = figure('Name', 'MAPS — Export', 'Color', 'w', ...
             'Position', [80 80 1300 780]);
 
-        % Layout: left column = vessel image (tall)
-        %         top-right  = diameter heatmap
-        %         bot-right  = average diameter trace
-        ax1 = subplot(2, 3, [1 4], 'Parent', expFig);
-        ax2 = subplot(2, 3, [2 3], 'Parent', expFig);
-        ax3 = subplot(2, 3, [5 6], 'Parent', expFig);
+        % Layout: without calcium, left column = vessel image (tall), right
+        % column = diameter heatmap (top) / trace (bottom) - unchanged from
+        % before the calcium feature existed.
+        %
+        % With calcium (Written by Kira Shaw with Claude Code, Aug 2026):
+        % image diagnostics live in the main GUI, only the export figure -
+        % there's no room for a second live image display next to dispAx, so
+        % this is the one place the calcium channel and exactly which pixels
+        % fed its trace can be checked. One image only (not two - the earlier
+        % separate "calcium + full perp lines" panel was redundant with ax1,
+        % which already shows those lines on the vessel channel), so a 6x2
+        % grid: left column = two images (vessel, each spanning 3 of 6 rows);
+        % right column = the three matching plots (diameter heatmap, diameter
+        % trace, calcium trace), each spanning 2 of 6 rows.
+        if caPresent
+            ax1  = subplot(6, 2, [1 3 5],  'Parent', expFig);
+            axCa = subplot(6, 2, [7 9 11], 'Parent', expFig);
+            ax2  = subplot(6, 2, [2 4],    'Parent', expFig);
+            ax3  = subplot(6, 2, [6 8],    'Parent', expFig);
+            ax4  = subplot(6, 2, [10 12],  'Parent', expFig);
+        else
+            ax1 = subplot(2, 3, [1 4], 'Parent', expFig);
+            ax2 = subplot(2, 3, [2 3], 'Parent', expFig);
+            ax3 = subplot(2, 3, [5 6], 'Parent', expFig);
+        end
 
         % ---- ax1: mean vessel + skeletons + ROIs + subsampled perp lines ----
         imagesc(ax1, meanVess);
@@ -3369,6 +3788,66 @@ setappdata(fig, 'state', state);
         end
         hold(ax1, 'off');
 
+        % ---- axCa: calcium channel + the actual edge-sample pixels (only if
+        % run). Written by Kira Shaw with Claude Code, Aug 2026 - one panel,
+        % not two (ax1 already shows the full perp lines, on the vessel
+        % channel, so repeating them here on the calcium channel just added
+        % a redundant second image). Each edge's sample is drawn as a single
+        % short line segment - from one extreme sampled pixel to the other,
+        % projected onto that skeleton point's own perpendicular direction
+        % (perpEndpts) so the segment is correctly oriented even though the
+        % underlying pixel list itself isn't in walk-along-the-line order -
+        % rather than a scatter dot per pixel, which at caInsidePx/
+        % caOutsidePx's usual scale (~10-30 px) read as a dense smear
+        % covering most of the ROI once several skeleton points were
+        % overlaid. Two segments per skeleton point, with a gap between them
+        % over the vessel interior - matching the original script's own
+        % example figure (calcium sampled only in a ring either side of each
+        % edge, not across the whole line).
+        if caPresent
+            imagesc(axCa, s.caMeanImg);
+            colormap(axCa, 'gray');
+            axis(axCa, 'image');
+            axCa.XTick = [];  axCa.YTick = [];
+            title(axCa, 'Mean perivascular calcium  |  ROI  |  calcium sample pixels (subsample)');
+            hold(axCa, 'on');
+            for b = 1:nB
+                col = BC{mod(b-1,5)+1};
+                if b <= numel(s.masks) && ~isempty(s.masks{b})
+                    bnd = bwboundaries(s.masks{b});
+                    if ~isempty(bnd)
+                        plot(axCa, bnd{1}(:,2), bnd{1}(:,1), '-', ...
+                            'Color', col, 'LineWidth', 2);
+                    end
+                end
+                if b > numel(s.perpEndpts) || isempty(s.perpEndpts{b}), continue; end
+                ep = s.perpEndpts{b};
+                if b > numel(s.caEdge1Locs) || isempty(s.caEdge1Locs{b}), continue; end
+                e1 = s.caEdge1Locs{b};
+                e2 = s.caEdge2Locs{b};
+                nLn  = numel(e1);
+                step = max(1, floor(nLn / 15));
+                for k = 1:step:nLn
+                    if k > size(ep,1) || any(isnan(ep(k,:))), continue; end
+                    dirVec = [ep(k,3)-ep(k,1), ep(k,4)-ep(k,2)];
+                    nrm    = norm(dirVec);
+                    if nrm < eps, continue; end
+                    dirVec = dirVec / nrm;
+                    for edgeCell = {e1{k}, e2{k}}
+                        locs_e = edgeCell{1};
+                        if isempty(locs_e), continue; end
+                        [py, px] = ind2sub([imH imW], locs_e);
+                        proj = (double(px)-ep(k,1))*dirVec(1) + (double(py)-ep(k,2))*dirVec(2);
+                        [~, iMin] = min(proj);
+                        [~, iMax] = max(proj);
+                        plot(axCa, [px(iMin) px(iMax)], [py(iMin) py(iMax)], '-', ...
+                            'Color', col, 'LineWidth', 2.5);
+                    end
+                end
+            end
+            hold(axCa, 'off');
+        end
+
         % ---- ax2: diameter heatmap (all branches stacked) -------------------
         allDiam = vertcat(s.cont_diams{:});
         imagesc(ax2, double(allDiam));
@@ -3398,6 +3877,30 @@ setappdata(fig, 'state', state);
         legend(ax3, 'Location', 'best');
         title(ax3, 'Average diameter');
         grid(ax3, 'on');
+
+        % ---- ax4: average perivascular calcium dF/F0 (only if run) ----------
+        % Written by Kira Shaw with Claude Code, Aug 2026 - same branch-by-
+        % branch colour coding as ax3, mirroring the live GUI's caAx. Shows
+        % dF/F0 (background-ring subtracted, sliding-baseline normalised),
+        % same choice as the live plot - raw/background/background-corrected
+        % are all still in the data export, just not plotted here.
+        if caPresent
+            hold(ax4, 'on');
+            for b = 1:nB
+                if b > numel(s.cont_calcium_dFF) || isempty(s.cont_calcium_dFF{b}), continue; end
+                col       = BC{mod(b-1,5)+1};
+                frameVecB = 1:size(s.cont_calcium_dFF{b}, 2);
+                plot(ax4, frameVecB, nanmean(s.cont_calcium_dFF{b}, 1), '-', ...
+                    'Color', col, 'LineWidth', 2, ...
+                    'DisplayName', sprintf('Branch %d', b));
+            end
+            hold(ax4, 'off');
+            xlabel(ax4, 'Frame');
+            ylabel(ax4, 'Perivascular \DeltaF/F_0');
+            legend(ax4, 'Location', 'best');
+            title(ax4, 'Average perivascular calcium (\DeltaF/F_0)');
+            grid(ax4, 'on');
+        end
 
         % ---- save dialog ----------------------------------------------------
         [fn, fp] = uiputfile( ...
@@ -5235,6 +5738,28 @@ function p = pctileLocal(x, pct)
     posK = 100*((1:n) - 0.5) / n;
     p = interp1(posK, x, pct, 'linear', 'extrap');
     p = min(max(p, x(1)), x(end));   % extrap can slightly overshoot past the ends
+end
+
+function F0 = slidingBaseline(F, winFrames)
+% slidingBaseline  Suite2p-style 'maximin' baseline for dF/F0 (Written by
+% Kira Shaw with Claude Code, Aug 2026) - see suite2p.readthedocs.io,
+% Settings ('baseline' = 'maximin'): Gaussian-smooth the trace, then a
+% sliding minimum filter, then a sliding maximum filter, both over the
+% same window. The min-then-max ("opening") tracks the local resting
+% level without the raw sliding-min's floor being dragged down by single
+% noisy low frames, and - unlike a single global min/max over the whole
+% recording (see calcium_norm in FWHM_diam_perivascCa_adapted.m) - it
+% tracks slow drift (bleaching, focus) rather than being set by one
+% outlier frame anywhere in the recording.
+%INPUTS
+% F         : [skeleton pt x frame] trace(s) to baseline, one row each
+% winFrames : baseline window, in frames (caBaselineSec * fps, see cb_go)
+%OUTPUTS
+% F0        : same size as F, the sliding baseline for each row
+    sigmaFrames = max(1, round(winFrames / 15));   % light smoothing, not user-facing
+    Fs   = smoothdata(F, 2, 'gaussian', sigmaFrames);
+    Fmin = movmin(Fs, winFrames, 2);
+    F0   = movmax(Fmin, winFrames, 2);
 end
 
 % Written by Kira Shaw with Claude Code, Aug 2026.
