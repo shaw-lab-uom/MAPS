@@ -3250,9 +3250,9 @@ setappdata(fig, 'state', state);
             %  vessel properly?) on dispAx before the slow per-frame FWHM
             %  crunching starts.
             % ===================================================================
-            cont_diam  = nan(nLines, nFrames, 'single');
-            perpEndpts = nan(nLines, 4);   % [x1 y1 x2 y2] for export figure
-            locsAll    = cell(nLines, 1);  % linear pixel indices along each perp line
+            cont_diam   = nan(nLines, nFrames, 'single');
+            perpEndpts  = nan(nLines, 4);   % [x1 y1 x2 y2] for export figure
+            perpSampAll = cell(nLines, 1);  % ordered [x y] samples, 1 px apart, per perp line
 
             postUpdate(sprintf('Branch %d / %d:  checking scan geometry...', b, nB));
 
@@ -3292,9 +3292,15 @@ setappdata(fig, 'state', state);
                     prevAngle = pa;
                 end
 
-                t     = linspace(-normlength, normlength, 10000);
-                normx = xc + t .* cos(pa);
-                normy = yc + t .* sin(pa);
+                % Sample the perpendicular at uniform 1-pixel arc-length
+                % steps, keeping the samples in order from one end of the
+                % line to the other. Consecutive samples are then exactly one
+                % pixel apart along the line, so (i2-i1)*pxsz is a true FWHM
+                % at any vessel orientation - not only for perpendiculars
+                % that happen to run along a pixel axis.
+                tline = -normlength:normlength;
+                normx = xc + tline .* cos(pa);
+                normy = yc + tline .* sin(pa);
 
                 % clip to image bounds then ROI mask
                 bad = normx<1 | normx>imW | normy<1 | normy>imH;
@@ -3307,8 +3313,7 @@ setappdata(fig, 'state', state);
 
                 if ~isempty(normx)
                     perpEndpts(k,:) = [normx(1) normy(1) normx(end) normy(end)];
-                    xt = round(normx);  yt = round(normy);
-                    locsAll{k} = unique(sub2ind([imH imW], yt, xt));
+                    perpSampAll{k}  = [normx(:), normy(:)];
                 end
 
                 % sanity-check overlay: add every 10th perp line (as in export fig)
@@ -3377,9 +3382,9 @@ setappdata(fig, 'state', state);
                     ImCa = squeeze(maskCa(i,:,:));
                 end
                 for k = 1:nLinesEff
-                    locs = locsAll{k};
-                    if isempty(locs), continue; end
-                    prof   = ImVess(locs);
+                    XY = perpSampAll{k};
+                    if isempty(XY), continue; end
+                    prof   = interp2(ImVess, XY(:,1), XY(:,2), 'nearest');
                     valid  = ~isnan(prof);
                     prof   = prof(valid);
                     if numel(prof) < 2, continue; end
@@ -3387,35 +3392,34 @@ setappdata(fig, 'state', state);
                     i1 = find(prof >= hm, 1, 'first');
                     i2 = find(prof >= hm, 1, 'last');
                     if ~isempty(i1) && ~isempty(i2)
-                        cont_diam(k,i) = (i2 - i1) * pxsz_um;
+                        cont_diam(k,i) = (i2 - i1) * pxsz_um;   % samples are 1 px apart
 
                         % ---- perivascular calcium (Written by Kira Shaw with
                         % Claude Code, Aug 2026) - same edge-expansion as
                         % FWHM_diam_perivascCa_adapted.m: caOutsidePx out to
                         % caInsidePx in around edge 1, mirrored around edge 2.
-                        % locsNZ (locs filtered the same way as prof, via
-                        % 'valid') keeps i1/i2 correctly aligned to pixel
-                        % locations even on the rare line with an out-of-mask
-                        % NaN in it.
                         if caEnabled
-                            locsNZ = locs(valid);
-                            % Kept as two separate ranges (not concatenated
-                            % first) so the representative-frame capture
-                            % below can store each edge's pixels separately
-                            % - the mean itself still pools both edges
-                            % together exactly as FWHM_diam_perivascCa_
-                            % adapted.m does (Kira Shaw with Claude Code,
-                            % Aug 2026).
+                            % XYnz: the same ordered, 1-px-spaced sample
+                            % points that survived 'valid', so i1/i2 index
+                            % straight into them (Kira Shaw with Claude Code).
+                            XYnz = XY(valid,:);
                             lineInd1 = (i1-caOutsidePx):(i1+caInsidePx);
                             lineInd2 = (i2-caInsidePx):(i2+caOutsidePx);
-                            lineInd1(lineInd1 < 1 | lineInd1 > numel(locsNZ)) = [];
-                            lineInd2(lineInd2 < 1 | lineInd2 > numel(locsNZ)) = [];
+                            lineInd1(lineInd1 < 1 | lineInd1 > size(XYnz,1)) = [];
+                            lineInd2(lineInd2 < 1 | lineInd2 > size(XYnz,1)) = [];
                             lineInd = [lineInd1, lineInd2];
                             if ~isempty(lineInd)
-                                cont_calcium(k,i) = nanmean(ImCa(locsNZ(lineInd)));
+                                cont_calcium(k,i) = mean(interp2(ImCa, ...
+                                    XYnz(lineInd,1), XYnz(lineInd,2), 'nearest'), 'omitnan');
                                 if i == repFrame
-                                    if ~isempty(lineInd1), caEdge1Locs{k} = locsNZ(lineInd1); end
-                                    if ~isempty(lineInd2), caEdge2Locs{k} = locsNZ(lineInd2); end
+                                    if ~isempty(lineInd1)
+                                        caEdge1Locs{k} = sub2ind([imH imW], ...
+                                            round(XYnz(lineInd1,2)), round(XYnz(lineInd1,1)));
+                                    end
+                                    if ~isempty(lineInd2)
+                                        caEdge2Locs{k} = sub2ind([imH imW], ...
+                                            round(XYnz(lineInd2,2)), round(XYnz(lineInd2,1)));
+                                    end
                                 end
                             end
 
@@ -3428,9 +3432,10 @@ setappdata(fig, 'state', state);
                             % the whole trace is in).
                             bgInd = [(i1-caOutsidePx-caBgRingPx):(i1-caOutsidePx-1), ...
                                      (i2+caOutsidePx+1):(i2+caOutsidePx+caBgRingPx)];
-                            bgInd(bgInd < 1 | bgInd > numel(locsNZ)) = [];
+                            bgInd(bgInd < 1 | bgInd > size(XYnz,1)) = [];
                             if ~isempty(bgInd)
-                                cont_calcium_bg(k,i) = nanmean(ImCa(locsNZ(bgInd)));
+                                cont_calcium_bg(k,i) = mean(interp2(ImCa, ...
+                                    XYnz(bgInd,1), XYnz(bgInd,2), 'nearest'), 'omitnan');
                             end
                         end
                     end
