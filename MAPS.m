@@ -265,35 +265,40 @@ chkPerivascularCa = uicheckbox(pnlProcOptions, ...
     'Value',           false, 'FontSize', F(11), ...
     'ValueChangedFcn', @(src,~) cb_perivascularCaChanged(src));
 
-% Calcium-line pixel lengths (Written by Kira Shaw with Claude Code, Aug
-% 2026) - how far the perivascular sampling line extends either side of
-% each FWHM-detected vessel edge, matching prefs.insidePx/outsidePx from
-% FWHM_diam_perivascCa_adapted.m (defaults 10/20 there). Always editable,
-% not just once ticked - so the values are already right by the time the
-% user does tick the box.
+% Calcium-line lengths, in MICRONS (Written by Kira Shaw with Claude Code,
+% Aug 2026) - how far the perivascular sampling band extends either side of
+% each FWHM-detected vessel edge. Originally entered in pixels (10/20,
+% matching prefs.insidePx/outsidePx in FWHM_diam_perivascCa_adapted.m), but
+% a fixed pixel width means a different physical distance at every zoom, so
+% at high magnification the background ring could sit on top of labelled
+% perivascular processes. These fields are now in microns and converted to
+% pixels in cb_go using the (auto-detected) pixel size; the defaults 3.5 /
+% 7 um reproduce the old 10 / 20 px behaviour at ~0.35 um/px. Always
+% editable, not just once ticked.
 lblCaIn = uilabel(pnlProcOptions, 'Position', P(232,45,42,20), ...
-    'Text', 'In (px):', 'FontSize', F(9), 'FontColor', [0.25 0.25 0.25]);
+    'Text', 'In (um):', 'FontSize', F(9), 'FontColor', [0.25 0.25 0.25]);
 efCaInsidePx = uieditfield(pnlProcOptions, 'numeric', ...
     'Position', P(274,43,32,22), ...
-    'Value',    10, 'Limits', [0 Inf], 'FontSize', F(9));
+    'Value',    3.5, 'Limits', [0 Inf], 'FontSize', F(9));
 lblCaOut = uilabel(pnlProcOptions, 'Position', P(310,45,48,20), ...
-    'Text', 'Out (px):', 'FontSize', F(9), 'FontColor', [0.25 0.25 0.25]);
+    'Text', 'Out (um):', 'FontSize', F(9), 'FontColor', [0.25 0.25 0.25]);
 efCaOutsidePx = uieditfield(pnlProcOptions, 'numeric', ...
     'Position', P(358,43,32,22), ...
-    'Value',    20, 'Limits', [0 Inf], 'FontSize', F(9));
+    'Value',    7, 'Limits', [0 Inf], 'FontSize', F(9));
 
 % Calcium normalisation row (Written by Kira Shaw with Claude Code, Aug
 % 2026) - Suite2p-style dF/F0: a further-out background ring (sampled the
-% same way as In/Out above, but starting where the Out ring ends) is
-% subtracted with coefficient r (Suite2p's own default neuropil
-% coefficient, neucoeff = 0.7), then a sliding maximin filter over the
-% baseline window gives F0 for dF/F0 = (F-F0)/F0. See cb_go for the actual
-% computation and the README for the write-up/references.
+% same way as In/Out above, but starting just beyond the Out ring, after a
+% 1 um guard gap) is subtracted with coefficient r (Suite2p's own default
+% neuropil coefficient, neucoeff = 0.7), then a sliding maximin filter over
+% the baseline window gives F0 for dF/F0 = (F-F0)/F0. BG ring width is in
+% MICRONS (converted to px in cb_go); default 5 um ~= the old 15 px at
+% ~0.35 um/px. See cb_go for the computation and the README for references.
 lblCaBg = uilabel(pnlProcOptions, 'Position', P(LX,9,74,20), ...
-    'Text', 'BG ring (px):', 'FontSize', F(9), 'FontColor', [0.25 0.25 0.25]);
+    'Text', 'BG ring (um):', 'FontSize', F(9), 'FontColor', [0.25 0.25 0.25]);
 efCaBgRingPx = uieditfield(pnlProcOptions, 'numeric', ...
     'Position', P(84,7,30,22), ...
-    'Value',    15, 'Limits', [0 Inf], 'FontSize', F(9));
+    'Value',    5, 'Limits', [0 Inf], 'FontSize', F(9));
 lblCaBgCoeff = uilabel(pnlProcOptions, 'Position', P(120,9,16,20), ...
     'Text', 'r:', 'FontSize', F(9), 'FontColor', [0.25 0.25 0.25]);
 efCaBgCoeff = uieditfield(pnlProcOptions, 'numeric', ...
@@ -1036,9 +1041,14 @@ state.cont_calcium  = {};       % xyDiam: per-branch raw perivascular Ca trace (
 state.cont_calcium_bg     = {}; % xyDiam: per-branch background-ring trace (AU)
 state.cont_calcium_bgcorr = {}; % xyDiam: per-branch background-subtracted trace (AU)
 state.cont_calcium_dFF    = {}; % xyDiam: per-branch dF/F0 (Suite2p-style, see cb_go)
-state.caInsidePx    = 10;       % xyDiam: px inside vessel edge sampled for calcium
-state.caOutsidePx   = 20;       % xyDiam: px outside vessel edge sampled for calcium
-state.caBgRingPx    = 15;       % xyDiam: px width of the background ring beyond Out
+state.caInsideUm    = 3.5;      % xyDiam: microns inside vessel edge sampled for calcium
+state.caOutsideUm   = 7;        % xyDiam: microns outside vessel edge sampled for calcium
+state.caBgRingUm    = 5;        % xyDiam: micron width of the background ring beyond Out
+state.caGuardUm     = 1;        % xyDiam: guard gap between the signal ring and the BG ring
+state.caInsidePx    = NaN;      % xyDiam: the above, resolved to px in cb_go via pixel size
+state.caOutsidePx   = NaN;
+state.caBgRingPx    = NaN;
+state.caGuardPx     = NaN;
 state.caBgCoeff     = 0.7;      % xyDiam: background subtraction coefficient r
 state.caBaselineSec = 60;       % xyDiam: dF/F0 sliding-baseline window, seconds
 state.caDarkFloor   = NaN;      % xyDiam: dark-offset floor subtracted from calcium (see cb_go)
@@ -3108,6 +3118,8 @@ setappdata(fig, 'state', state);
         s.caEdge1Locs = cell(nB, 1);
         s.caEdge2Locs = cell(nB, 1);
         s.caMeanImg    = [];
+        s.caSigBgCorr  = nan(nB, 1);   % per-branch signal<->background ring corr (QC)
+        s.caBgKeptFrac = nan(nB, 1);   % per-branch fraction of BG ring inside image/ROI (QC)
 
         cla(heatAx);  cla(traceAx);  hold(traceAx, 'on');
 
@@ -3120,9 +3132,37 @@ setappdata(fig, 'state', state);
         % calcium TIF doesn't match the vessel TIF's dimensions.
         caEnabled = chkPerivascularCa.Value && ~isempty(s.perivascularCaPath) ...
             && isfile(s.perivascularCaPath);
-        caInsidePx  = round(efCaInsidePx.Value);
-        caOutsidePx = round(efCaOutsidePx.Value);
-        caBgRingPx  = round(efCaBgRingPx.Value);
+        % In / Out / BG ring are entered in MICRONS; convert to pixels here
+        % using the pixel size (Written by Kira Shaw with Claude Code, Aug
+        % 2026). A fixed pixel width would mean a different physical distance
+        % at every zoom, which at high magnification can put the background
+        % ring on top of labelled perivascular processes. A 1 um guard gap
+        % (caGuardPx, min 1 px) is inserted between the signal ring and the
+        % BG ring so the PSF tail / edge-tracking jitter doesn't leak signal
+        % straight into the background estimate. If no pixel size is set, the
+        % field values are used as pixels (old behaviour) and this is flagged.
+        caInsideUm  = efCaInsidePx.Value;
+        caOutsideUm = efCaOutsidePx.Value;
+        caBgRingUm  = efCaBgRingPx.Value;
+        caGuardUm   = 1;    % guard gap (microns) between the signal ring and the BG ring
+        if isfield(s,'caGuardUm') && ~isempty(s.caGuardUm) && s.caGuardUm >= 0
+            caGuardUm = s.caGuardUm;
+        end
+        if ~strcmp(diamUnit, 'pixels')
+            caInsidePx  = max(1, round(caInsideUm  / pxsz_um));
+            caOutsidePx = max(1, round(caOutsideUm / pxsz_um));
+            caBgRingPx  = max(1, round(caBgRingUm  / pxsz_um));
+            caGuardPx   = max(1, round(caGuardUm   / pxsz_um));
+        else
+            caInsidePx  = max(1, round(caInsideUm));
+            caOutsidePx = max(1, round(caOutsideUm));
+            caBgRingPx  = max(1, round(caBgRingUm));
+            caGuardPx   = 1;
+            if caEnabled
+                postUpdate(['Perivascular calcium: no pixel size set - ' ...
+                    'treating In/Out/BG ring values as pixels, not microns.']);
+            end
+        end
         caBgCoeff   = efCaBgCoeff.Value;
         caBaselineSec = efCaBaselineSec.Value;
         rawCa = [];
@@ -3372,6 +3412,11 @@ setappdata(fig, 'state', state);
                 caEdge1Locs = cell(nLines, 1);
                 caEdge2Locs = cell(nLines, 1);
                 repFrame    = min(10, nFrames);
+                % QC counters: how much of the BG ring survived clipping to
+                % the image / branch ROI, this branch (see the warning after
+                % the frame loop).
+                caBgTotal = 0;
+                caBgKept  = 0;
             end
 
             frameStep = max(1, round(nFrames/100));   % ~100 display refreshes total
@@ -3425,14 +3470,18 @@ setappdata(fig, 'state', state);
 
                             % ---- background ring (Written by Kira Shaw with
                             % Claude Code, Aug 2026) - Suite2p-style: a further
-                            % -out annulus, continuing straight on from where
-                            % the In/Out sampling above stops, used as a
-                            % common-mode background reference (see
-                            % cont_calcium_bgcorr/dF-F0 below, computed once
-                            % the whole trace is in).
-                            bgInd = [(i1-caOutsidePx-caBgRingPx):(i1-caOutsidePx-1), ...
-                                     (i2+caOutsidePx+1):(i2+caOutsidePx+caBgRingPx)];
-                            bgInd(bgInd < 1 | bgInd > size(XYnz,1)) = [];
+                            % -out annulus used as a common-mode background
+                            % reference (see cont_calcium_bgcorr/dF-F0 below).
+                            % It starts caGuardPx pixels PAST the end of the
+                            % Out ring - a guard gap so the PSF tail / edge
+                            % jitter doesn't leak real signal into the
+                            % background estimate - and is caBgRingPx wide.
+                            bgOff = caOutsidePx + caGuardPx;
+                            bgIndFull = [(i1-bgOff-caBgRingPx):(i1-bgOff-1), ...
+                                         (i2+bgOff+1):(i2+bgOff+caBgRingPx)];
+                            bgInd = bgIndFull(bgIndFull >= 1 & bgIndFull <= size(XYnz,1));
+                            caBgTotal = caBgTotal + numel(bgIndFull);
+                            caBgKept  = caBgKept  + numel(bgInd);
                             if ~isempty(bgInd)
                                 cont_calcium_bg(k,i) = mean(interp2(ImCa, ...
                                     XYnz(bgInd,1), XYnz(bgInd,2), 'nearest'), 'omitnan');
@@ -3513,6 +3562,41 @@ setappdata(fig, 'state', state);
 
                 s.cont_calcium_bgcorr{b} = cont_calcium_bgcorr;
                 s.cont_calcium_dFF{b}    = cont_calcium_dFF;
+
+                % ---- background-ring QC (Written by Kira Shaw with Claude
+                % Code, Aug 2026). The background subtraction assumes the BG
+                % ring carries no perivascular-cell signal. Two cheap checks:
+                %  (1) if the branch-mean signal and background traces are
+                %      very highly correlated the BG ring is probably picking
+                %      up cell signal, so F - r*F_bg is over-subtracting and
+                %      dF/F0 is under-reported - widen In/Out or move the ring
+                %      out, or lower r;
+                %  (2) if much of the BG ring fell outside the image / branch
+                %      ROI it is being sampled from a biased sliver - draw a
+                %      larger ROI or reduce the ring widths.
+                sigTr = mean(double(cont_calcium),    1, 'omitnan');
+                bgTr  = mean(double(cont_calcium_bg), 1, 'omitnan');
+                okTr  = isfinite(sigTr) & isfinite(bgTr);
+                rSB = NaN;
+                if nnz(okTr) >= 10 && std(sigTr(okTr)) > 0 && std(bgTr(okTr)) > 0
+                    cc  = corrcoef(sigTr(okTr), bgTr(okTr));
+                    rSB = cc(1,2);
+                end
+                keptFrac = caBgKept / max(1, caBgTotal);
+                s.caSigBgCorr(b)  = rSB;
+                s.caBgKeptFrac(b) = keptFrac;
+                if isfinite(rSB) && rSB > 0.9
+                    postUpdate(sprintf(['Branch %d: perivascular signal and ' ...
+                        'background rings are highly correlated (r = %.2f) - the ' ...
+                        'background subtraction may be over-correcting dF/F0. ' ...
+                        'Consider widening In/Out or lowering r.'], b, rSB));
+                end
+                if caBgTotal > 0 && keptFrac < 0.7
+                    postUpdate(sprintf(['Branch %d: only %.0f%% of the background ' ...
+                        'ring fell inside the image / ROI - draw a larger branch ROI ' ...
+                        'or reduce the ring widths for a reliable background.'], ...
+                        b, 100*keptFrac));
+                end
             end
 
             % ---- finalize heatmap + trace for this branch (exact values) ----
@@ -3535,9 +3619,14 @@ setappdata(fig, 'state', state);
 
         end % branch loop
 
-        s.caInsidePx    = caInsidePx;
+        s.caInsideUm    = caInsideUm;    % as entered (microns)
+        s.caOutsideUm   = caOutsideUm;
+        s.caBgRingUm    = caBgRingUm;
+        s.caGuardUm     = caGuardUm;
+        s.caInsidePx    = caInsidePx;    % resolved to pixels for this recording
         s.caOutsidePx   = caOutsidePx;
         s.caBgRingPx    = caBgRingPx;
+        s.caGuardPx     = caGuardPx;
         s.caBgCoeff     = caBgCoeff;
         s.caBaselineSec = caBaselineSec;
         s.caDarkFloor   = caDarkFloor;
@@ -3599,7 +3688,10 @@ setappdata(fig, 'state', state);
             results.cont_calcium_bg     = s.cont_calcium_bg;      % background ring, AU
             results.cont_calcium_bgcorr = s.cont_calcium_bgcorr;  % background-subtracted, AU
             results.cont_calcium_dFF    = s.cont_calcium_dFF;     % dF/F0 (shown live)
-            for fld = {'caInsidePx','caOutsidePx','caBgRingPx','caBgCoeff','caBaselineSec','caDarkFloor'}
+            for fld = {'caInsideUm','caOutsideUm','caBgRingUm','caGuardUm', ...
+                       'caInsidePx','caOutsidePx','caBgRingPx','caGuardPx', ...
+                       'caBgCoeff','caBaselineSec','caDarkFloor', ...
+                       'caSigBgCorr','caBgKeptFrac'}
                 if isfield(s, fld{1}), results.(fld{1}) = s.(fld{1}); end
             end
             save(fullfile(fp,fn), 'results', '-v7.3');
