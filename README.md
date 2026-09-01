@@ -27,7 +27,7 @@ See `example_MAPSGUI_xyDiam.mp4`, `example_MAPSGUI_linescan.mp4`, `example_MAPSG
 
 ![MAPS graphical abstract](images/maps_graphical_abstract.png)
 
-One MATLAB GUI, four microvascular read-outs from the same two-photon dataset — `xyDiam` (vessel diameter over time), perivascular calcium (ΔF/F₀ or z-score, user-selectable), `linescan` (RBC velocity, haematocrit and flux) and `zstack` (density, branch length and tortuosity) — cross-validated against VasoMetrics (diameter) and the Drew-lab Radon method (RBC velocity).
+One MATLAB GUI, four microvascular read-outs from two-photon microscopy — `xyDiam` (vessel diameter over time), perivascular calcium (ΔF/F₀ or z-score, user-selectable), `linescan` (RBC velocity, haematocrit and flux) and `zstack` (density, branch length and tortuosity) — cross-validated against VasoMetrics (diameter) and the Drew-lab Radon method (RBC velocity) (manuscript in preparation).
 
 ## Getting started
 
