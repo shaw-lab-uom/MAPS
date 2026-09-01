@@ -9,6 +9,7 @@ See `example_MAPSGUI_xyDiam.mp4`, `example_MAPSGUI_linescan.mp4`, `example_MAPSG
 ## Contents
 
 - [Requirements](#requirements)
+- [Graphical abstract](#graphical-abstract)
 - [Getting started](#getting-started)
 - [xyDiam — vessel diameter over time](#xydiam--vessel-diameter-over-time)
 - [linescan — RBC velocity, haematocrit & flux from a repeated-line scan](#linescan--rbc-velocity-haematocrit--flux-from-a-repeated-line-scan)
@@ -21,6 +22,12 @@ See `example_MAPSGUI_xyDiam.mp4`, `example_MAPSGUI_linescan.mp4`, `example_MAPSG
 - MATLAB, R2023b or later recommended. `readstruct` (used for the `.xml` auto-detect path in both analysis types) needs R2020b+; `xline` (used in the zstack export figure) needs R2018b+.
 - Image Processing Toolbox — `bwmorph`, `imfill`, `bwareaopen`, `poly2mask`, `bwboundaries`, `drawpolygon`, `roipoly` (xyDiam); `bwskel`, `bwdist`, `imresize3`, `imgaussfilt3`, `graythresh` (zstack); `radon`, `drawline` (linescan).
 - No Statistics and Machine Learning Toolbox needed — the zstack percentile calculations use a small local implementation instead, and linescan's mean/SD/range/percentile figures are all base-MATLAB (`mean`/`std`/`min`/`max` with `'omitnan'`).
+
+## Graphical abstract
+
+![MAPS graphical abstract](images/maps_graphical_abstract.png)
+
+One MATLAB GUI, four microvascular read-outs from the same two-photon dataset — `xyDiam` (vessel diameter over time), perivascular calcium (ΔF/F₀ or z-score, user-selectable), `linescan` (RBC velocity, haematocrit and flux) and `zstack` (density, branch length and tortuosity) — cross-validated against VasoMetrics (diameter) and the Drew-lab Radon method (RBC velocity).
 
 ## Getting started
 
