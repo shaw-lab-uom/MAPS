@@ -646,7 +646,7 @@ lblLsWinSzParam = uilabel(pnl, 'Position', P(212,48,72,18), ...
     'Text', 'Window (ms):', 'FontSize', F(10), 'Visible', 'off');
 efLsWinSz = uieditfield(pnl, 'numeric', ...
     'Position',        P(286,48,58,18), ...
-    'Value',           40, 'Limits', [4 10000], 'FontSize', F(10), ...
+    'Value',           80, 'Limits', [4 10000], 'FontSize', F(10), ...
     'Visible',         'off', ...
     'ValueChangedFcn', @(~,~) cb_lsWinSzChanged());
 
@@ -3557,8 +3557,20 @@ setappdata(fig, 'state', state);
                 % number rather than a real percentage change - same class
                 % of physical-floor guard as the linescan velocity noise
                 % floor elsewhere in this file.
+                % Extends the <=0 guard: F0 that is positive but at/near zero
+                % (e.g. a recording with a large fixed DC pedestal, where the
+                % dark-floor + background subtraction leave F_bgcorr - and so
+                % its baseline - hovering around zero) makes the ratio diverge
+                % into huge spikes that are a division artefact, not signal.
+                % Blank (NaN) those samples so the live/exported dF/F0 trace
+                % shows gaps rather than spikes; the background-corrected trace
+                % is unaffected and remains the readout to use in that case.
+                f0typ   = median(F0(F0 > 0), 'omitnan');
+                if isempty(f0typ) || ~isfinite(f0typ), f0typ = 0; end
+                F0floor = max(eps, 0.05 * f0typ);      % 5% of the typical baseline
                 cont_calcium_dFF = (cont_calcium_bgcorr - F0) ./ F0;
-                cont_calcium_dFF(F0 <= 0) = NaN;
+                cont_calcium_dFF(F0 < F0floor)              = NaN;
+                cont_calcium_dFF(abs(cont_calcium_dFF) > 20) = NaN;   % physically implausible
 
                 s.cont_calcium_bgcorr{b} = cont_calcium_bgcorr;
                 s.cont_calcium_dFF{b}    = cont_calcium_dFF;
